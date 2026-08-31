@@ -37,7 +37,7 @@
 
 ```mermaid
 flowchart LR
-    subgraph 前端层（SPA，一个代码库按角色分视图）
+    subgraph "前端层（SPA，一个代码库按角色分视图）"
         W[报销端<br/>上传发票/查结果/重提]
         A[审核端<br/>复核Agent总结/审批]
         M[管理端<br/>规则配置/统计驾驶舱/事前申请]
@@ -56,7 +56,7 @@ flowchart LR
         ANA --> ADAPT
     end
 
-    subgraph 现有系统侧（可替换）
+    subgraph "现有系统侧（可替换）"
         ADAPT --> MOCK[Mock OA 系统<br/>Demo]
         ADAPT --> REAL[真实 OA/费控/ERP]
     end
