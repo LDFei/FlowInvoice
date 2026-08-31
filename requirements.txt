@@ -1,0 +1,20 @@
+# FlowInvoice 后端依赖
+# 业务：差旅最小闭环所需的编排 / 接口 / 配置 / 测试依赖
+# 安装：pip install -r requirements.txt
+
+# ---- Agent 编排 ----
+langgraph>=0.4            # 图编排：总控图 / 业务子图 / HITL interrupt
+langchain-core>=0.3       # LangChain 核心：Runnable / State Schema 基础
+
+# ---- Web 接口 ----
+fastapi>=0.115            # REST API：报销提交 / 审批决策 / 状态查询
+uvicorn[standard]>=0.30   # ASGI 服务器
+python-multipart>=0.0.9   # 表单文件上传解析（FastAPI File/Form 依赖）
+pydantic>=2.7             # DTO 校验（FastAPI/Pydantic v2）
+
+# ---- 配置 ----
+PyYAML>=6.0               # 政策规则 YAML 加载
+
+# ---- 开发 / 测试 ----
+pytest>=8.0               # 单元 / 集成测试
+httpx>=0.27               # FastAPI TestClient 底层

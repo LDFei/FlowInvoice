@@ -1,0 +1,117 @@
+# app/container.py —— 依赖容器（装配根，依赖倒置的汇聚点）
+# 业务：集中创建适配器/工具/业务模块/总控图；FastAPI 启动与测试共用同一装配，便于替换 Mock（docs/01 §6）
+import sys
+
+from app.adapters.mock_oa import (
+    MockEmailProvider,
+    MockNotifyProvider,
+    MockUserProvider,
+    MockVerifyProvider,
+)
+from app.adapters.storage import SqliteStorage
+from app.core import ids
+from app.core.config import (
+    AMOUNT_DIFF_THRESHOLD,
+    CLAUSES_DIR,
+    DB_PATH,
+    POLICY_DIR,
+    RAG_ENABLED,
+    RAG_TOP_K,
+    ensure_dirs,
+)
+from app.core.uploader import Uploader
+from app.graphs.router_graph import build_router_graph
+from app.registry import MODULE_BUILDERS
+from app.shared.advance.service import AdvanceService
+from app.shared.policies.loader import PolicyLoader
+from app.shared.policies.rag import PolicyIndex
+from app.tools.advance_tool import AdvanceTool
+from app.tools.email_tool import EmailTool
+from app.tools.notify_tool import NotifyTool
+from app.tools.ocr_tool import OcrTool
+from app.tools.policy_rag_tool import PolicyRagTool
+from app.tools.verify_tool import VerifyTool
+
+
+class Container:
+    """依赖容器：所有单例 + 工具 + 业务模块 + 总控图"""
+
+    def __init__(
+        self,
+        *,
+        storage,
+        users,
+        verify_provider,
+        notify_provider,
+        email_provider,
+        policies,
+        advance_service,
+        amount_threshold,
+    ):
+        # 适配器（外部系统边界）
+        self.storage = storage
+        self.users = users
+        self.verify_provider = verify_provider
+        self.notify_provider = notify_provider
+        self.email_provider = email_provider
+        # 共享服务
+        self.policies = policies
+        self.advances = advance_service
+        self.amount_threshold = amount_threshold
+
+        # 工具层（封装 provider，供图节点调用）
+        self.ocr = OcrTool()
+        self.verify_tool = VerifyTool(verify_provider)
+        self.advance_tool = AdvanceTool(advance_service)
+        self.notify_tool = NotifyTool(notify_provider)
+        self.email_tool = EmailTool(email_provider)
+
+        # 制度条款 RAG（非结构化政策文本 → 按场景检索依据）
+        # 业务：BM25 词法检索离线可跑；换向量后端只改 PolicyIndex.retrieve（docs/03 §3）
+        self.policy_rag = PolicyRagTool(
+            PolicyIndex(CLAUSES_DIR, top_k=RAG_TOP_K),
+            enabled=RAG_ENABLED,
+        )
+
+        # 跨业务复用：上传解析器
+        self.uploader = Uploader()
+
+        # 业务模块（注册表装配：新增业务只改 registry.py）
+        self.businesses = {name: builder(self) for name, builder in MODULE_BUILDERS.items()}
+
+        # 总控图（依赖上面全部，构建一次复用）
+        self.graph = build_router_graph(self)
+
+
+def _force_utf8_console() -> None:
+    """把标准输出/错误流切到 UTF-8（中文 Windows 控制台默认 GBK，打印 ¥ 等会报错）"""
+    # 作用：Mock 通知/邮件会 print 中文与货币符号，统一编码避免 UnicodeEncodeError
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass  # 某些环境（pytest 重定向）不支持 reconfigure，忽略
+
+
+def build_container(db_path=None) -> Container:
+    """装配依赖容器（FastAPI 启动与测试共用）"""
+    # 作用：确保数据目录存在后再建库
+    _force_utf8_console()
+    ensure_dirs()
+    storage = SqliteStorage(db_path or DB_PATH)
+    # 作用：重启后序号续接已有单号，避免复用旧号（messages/emails 只追加，同号复用会让新单混入历史留痕）
+    ids.seed_from_existing(
+        [r["request_id"] for r in storage.list_requests()]
+        + [a["app_id"] for a in storage.list_advances()]
+    )
+    policies = PolicyLoader(POLICY_DIR)
+    return Container(
+        storage=storage,
+        users=MockUserProvider(),
+        verify_provider=MockVerifyProvider(),
+        notify_provider=MockNotifyProvider(storage),
+        email_provider=MockEmailProvider(storage),
+        policies=policies,
+        advance_service=AdvanceService(storage, policies),
+        amount_threshold=AMOUNT_DIFF_THRESHOLD,
+    )
