@@ -1,0 +1,40 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 环境变量 / 密钥 ----
+.env
+.env.*
+!.env.example
+
+# ---- Node / 前端 ----
+node_modules/
+dist/
+build/
+*.local
+
+# ---- 数据 / 日志（本地开发） ----
+*.db
+*.sqlite3
+logs/
+*.log
+
+# ---- IDE / 编辑器 ----
+.vscode/
+.idea/
+*.swp
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- 文档 / 临时 ----
+.plan/
+*.tmp
