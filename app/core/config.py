@@ -1,5 +1,6 @@
 # app/core/config.py —— 全局路径与基础配置
 # 业务：统一项目根路径/数据目录/上传目录/策略目录，避免各模块各自拼接路径
+import os
 from pathlib import Path
 
 # 作用：项目根目录 = 本文件向上两级（app/core -> app -> 项目根）
@@ -32,6 +33,11 @@ RAG_ENABLED = True
 
 # 作用：每次检索返回的条款条数
 RAG_TOP_K = 3
+
+# 作用：政策条款向量检索的 PostgreSQL DSN（pgvector）
+# 业务：设置后启用"BM25 + bge-m3 向量"混合检索（docs/03 §3）；
+#       为空则只走 BM25（无外部依赖，默认可跑）
+RAG_VECTOR_DSN = os.environ.get("FLOWINVOICE_PG_DSN", "")
 
 # 作用：金额误差容差（申报金额 vs 票面金额 差异比例）
 # 业务：超过该比例 → 打风险标记，提示申报人填写有误

@@ -3,7 +3,7 @@
 # 使用：docker compose up -d    （停：docker compose down；删卷重来：docker compose down -v）
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16   # 内置 pgvector 扩展（RAG 向量存储）
     container_name: flowinvoice-postgres
     restart: unless-stopped
     environment:

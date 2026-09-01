@@ -17,6 +17,7 @@ from app.core.config import (
     POLICY_DIR,
     RAG_ENABLED,
     RAG_TOP_K,
+    RAG_VECTOR_DSN,
     ensure_dirs,
 )
 from app.core.uploader import Uploader
@@ -25,6 +26,7 @@ from app.registry import MODULE_BUILDERS
 from app.shared.advance.service import AdvanceService
 from app.shared.policies.loader import PolicyLoader
 from app.shared.policies.rag import PolicyIndex
+from app.shared.policies.vector_store import PolicyVectorStore
 from app.tools.advance_tool import AdvanceTool
 from app.tools.email_tool import EmailTool
 from app.tools.notify_tool import NotifyTool
@@ -67,9 +69,11 @@ class Container:
         self.email_tool = EmailTool(email_provider)
 
         # 制度条款 RAG（非结构化政策文本 → 按场景检索依据）
-        # 业务：BM25 词法检索离线可跑；换向量后端只改 PolicyIndex.retrieve（docs/03 §3）
+        # 业务：默认 BM25 词法检索离线可跑；设置 FLOWINVOICE_PG_DSN 后启用
+        #       "BM25 + bge-m3 向量"混合检索，PG 不可用自动降级 BM25（docs/03 §3）
+        vector_store = PolicyVectorStore(RAG_VECTOR_DSN) if RAG_VECTOR_DSN else None
         self.policy_rag = PolicyRagTool(
-            PolicyIndex(CLAUSES_DIR, top_k=RAG_TOP_K),
+            PolicyIndex(CLAUSES_DIR, top_k=RAG_TOP_K, vector_store=vector_store),
             enabled=RAG_ENABLED,
         )
 

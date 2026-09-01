@@ -15,6 +15,11 @@ pydantic>=2.7             # DTO 校验（FastAPI/Pydantic v2）
 # ---- 配置 ----
 PyYAML>=6.0               # 政策规则 YAML 加载
 
+# ---- RAG 向量检索（政策条款 → pgvector，docs/03 §3） ----
+sentence-transformers>=3.0  # bge-m3 稠密向量（torch 推理；FastEmbed 0.8 不再支持 bge-m3）
+psycopg[binary]>=3.1      # PostgreSQL 驱动（psycopg3）
+pgvector>=0.2             # pgvector 向量类型适配（psycopg3 注册）
+
 # ---- 开发 / 测试 ----
 pytest>=8.0               # 单元 / 集成测试
 httpx>=0.27               # FastAPI TestClient 底层

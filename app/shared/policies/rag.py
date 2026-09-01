@@ -29,16 +29,35 @@ class ClauseChunk:
         self.tokens = _bigrams(text)
 
 
-class PolicyIndex:
-    """制度条款索引：文档 → 条款切块 → BM25 词法检索
+def _rrf_fuse(bm25_hits: list[dict], vec_hits: list[dict], top_k: int, k: int = 60) -> list[dict]:
+    """倒数排名融合（RRF）：合并 BM25 与向量两份榜单
 
-    业务：真实向量 RAG（嵌入+Chroma）只需替换 retrieve() 内部实现，
-          调用方（图节点/工具）零改动 —— 这就是可插拔边界
+    作用：两份榜单分数单位不同（词频 vs 余弦），不可直接比；
+          改按名次计分（第 n 名得 1/(k+n)），同一条款在榜单越靠前分越高、跨榜叠加
+    """
+    scores: dict[str, float] = {}
+    meta: dict[str, dict] = {}
+    for hits in (bm25_hits, vec_hits):
+        for i, h in enumerate(hits):
+            cid = h["clause_id"]
+            meta.setdefault(cid, {"clause_id": cid, "source": h["source"], "text": h["text"]})
+            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + i + 1)
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return [{**meta[cid], "score": round(s, 4)} for cid, s in ranked[:top_k]]
+
+
+class PolicyIndex:
+    """制度条款索引：文档 → 条款切块 → BM25 词法检索（可选 + pgvector 向量混合）
+
+    业务：vector_store 为 None 时纯 BM25（默认，离线可跑）；
+          传入 PolicyVectorStore 时走"BM25 + 向量"混合检索（RRF 融合），
+          PG 不可用/未种子自动降级回 BM25 —— 调用方（图节点/工具）零改动
     """
 
-    def __init__(self, clauses_dir: Path, top_k: int = 3):
+    def __init__(self, clauses_dir: Path, top_k: int = 3, vector_store=None):
         self.chunks = self._load(clauses_dir)
         self.top_k = top_k
+        self.vector_store = vector_store
         self._idf = self._compute_idf()
 
     def _load(self, clauses_dir: Path) -> list[ClauseChunk]:
@@ -71,10 +90,9 @@ class PolicyIndex:
                 df[t] = df.get(t, 0) + 1
         return {t: math.log(1 + (n - d + 0.5) / (d + 0.5)) for t, d in df.items()}
 
-    def retrieve(self, query: str, top_k: int | None = None) -> list[dict]:
-        """按查询检索 top-k 条款：{clause_id, source, text, score}（无命中返回空）"""
+    def _bm25_hits(self, query: str, top_k: int) -> list[dict]:
+        """BM25 词法检索（混合检索的词法侧；纯词重合，精确数字/术语命中稳）"""
         q_tokens = _bigrams(query)
-        top_k = top_k or self.top_k
         scored: list[tuple[float, ClauseChunk]] = []
         for c in self.chunks:
             score = sum(
@@ -88,3 +106,21 @@ class PolicyIndex:
             {"clause_id": c.clause_id, "source": c.source, "text": c.text, "score": round(s, 3)}
             for s, c in scored[:top_k]
         ]
+
+    def retrieve(self, query: str, top_k: int | None = None) -> list[dict]:
+        """按查询检索 top-k 条款：{clause_id, source, text, score}（无命中返回空）
+
+        有向量后端 → BM25 + 向量 RRF 融合（词与语义双兜底）；
+        无后端 / PG 挂了 / 未种子 / 模型加载失败 → 自动降级纯 BM25，不打断主流程
+        """
+        top_k = top_k or self.top_k
+        bm25_hits = self._bm25_hits(query, top_k)
+        if self.vector_store is None:
+            return bm25_hits
+        try:
+            vec_hits = self.vector_store.search(query, top_k)
+        except Exception:
+            return bm25_hits
+        if not vec_hits:
+            return bm25_hits
+        return _rrf_fuse(bm25_hits, vec_hits, top_k)
