@@ -1,13 +1,22 @@
 # app/main.py —— FastAPI 入口（只做装配，不含业务逻辑）
 # 业务：启动时装配依赖容器 + 种演示数据；挂载路由（docs/AGENTS.md §2 依赖方向 api→graphs）
+import re
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 
 from fastapi import FastAPI
 
+from app.core.logging import get_logger, log_info, setup_logging
+
+# 作用：企业级技术日志装配（JSON 文件轮转 + 控制台；级别/目录 env 可配，见 app/core/logging.py）
+# 业务：让业务模块（rag 等）的 INFO/WARNING 日志在 uvicorn 下可见 + 落盘可查
+setup_logging()
+logger = get_logger("app.main")
+
 from app.api.advance import router as advance_router
 from app.api.reimburse import router as reimburse_router
 from app.container import Container, build_container
+from app.core.config import RAG_VECTOR_DSN
 
 
 def seed_demo_data(container: Container) -> None:
@@ -30,7 +39,12 @@ async def lifespan(app: FastAPI):
     container = build_container()
     app.state.container = container
     seed_demo_data(container)
-    print("FlowInvoice 已启动：依赖容器就绪，演示数据已种入")
+    if RAG_VECTOR_DSN:
+        dsn_display = re.sub(r":([^@/]+)@", ":****@", RAG_VECTOR_DSN)   # 脱敏：不打印口令
+        log_info(logger, "RAG 混合检索已启用：BM25 + bge-m3 向量", vector_store=dsn_display)
+    else:
+        log_info(logger, "RAG 纯 BM25 模式（未配置 FLOWINVOICE_PG_DSN，向量检索关闭）")
+    log_info(logger, "FlowInvoice 已启动：依赖容器就绪，演示数据已种入")
     yield
 
 

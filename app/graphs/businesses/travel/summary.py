@@ -18,4 +18,6 @@ def build_travel_summary(state: dict) -> str:
         lines.append(f"政策依据 [{hit['clause_id']}]：{first_point}")
     if invoice.get("risk_flags"):
         lines.append(f"风险：{'；'.join(invoice['risk_flags'])}")
+    if state.get("compliance_explanation"):
+        lines.append(f"合规说明：{state['compliance_explanation']}")
     return "\n".join(lines)

@@ -133,12 +133,15 @@ flowinvoice/
 |------|------|
 | 编排 | **LangGraph**（Python）：状态机 / 子图 / `interrupt`（HITL） |
 | LLM 框架 | LangChain：工具调用、Prompt 管理 |
-| LLM | GPT-4o / Claude / Qwen（可配置） |
-| OCR | 数电票XML解析 / PaddleOCR / 多模态 LLM（分层可插拔，见 docs/04） |
+| LLM | DeepSeek（OpenAI 兼容，可配置；无 key 自动降级规则路径） |
+| OCR | 数电票XML解析（L1）/ 文本模板库（L4）已实现；PaddleOCR / 多模态 LLM 规划中（分层可插拔，见 docs/04） |
 | API | FastAPI + Pydantic |
-| 存储 | SQLite（Demo）→ PostgreSQL（生产） |
+| 存储 | PostgreSQL（生产，PgStorage）+ SQLite（测试替身）；pgvector 混合检索 |
+| 对象存储 | MinIO / S3 兼容（发票源文件，DB 只存 file_key；未配置走本地目录替身） |
+| 异步任务 | Celery + Redis（#52 待接线） |
+| 日志 | 结构化 JSON 日志（request_id/invoice_no 关联 + DSN 脱敏 + 按日轮转） |
 | 前端 | React + TypeScript + Vite + Ant Design |
-| 打包 | Docker + docker-compose |
+| 打包 | Docker + docker-compose（#54 编排） |
 
 ---
 
@@ -218,7 +221,9 @@ pytest tests/test_api.py  # 只跑 API 层
 | [`docs/03-报销制度研究与RAG设计.md`](docs/03-报销制度研究与RAG设计.md) | 制度条款语料 + BM25/向量 RAG 混合检索设计 |
 | [`docs/04-发票识别与验真设计.md`](docs/04-发票识别与验真设计.md) | 发票形态分层识别 + 税局查验/电子签名验真（权威真实性，非 LLM） |
 | [`docs/05-面试架构.md`](docs/05-面试架构.md) | 面试叙事框架：项目一句话定位 + 高频考点映射 + 追问应对（独立于整体架构） |
+| [`docs/06-数据模型设计.md`](docs/06-数据模型设计.md) | 生产级 PG 数据模型定稿：requests/submissions/invoices/approval_records + 发票池部分唯一索引 |
 | [`docs/07-开发Bug总结.md`](docs/07-开发Bug总结.md) | 开发 Bug 复盘（现象→根因→修复→启示，面试难题素材） |
+| [`docs/08~11-代码审核记录.md`](docs/08-代码审核记录.md) | 第 1~4 轮代码审核记录（阶段收口总审见 docs/11） |
 | [`docs/AGENTS.md`](docs/AGENTS.md) | 代码规范：分层/复用/注释/扩展规范 + 代码简洁硬性规则，每行代码「作用 + 业务用途」 |
 
 ---
@@ -246,16 +251,32 @@ pytest tests/test_api.py  # 只跑 API 层
 - [x] 前端多端（报销端 / 审核端 / 出纳端，一个 React SPA 按角色分视图）
 - [ ] 统计驾驶舱 + 管理报表
 
-### 迭代待办（数据/记忆/LLM 技术债）
+### 迭代待办（当前阶段任务清单 · 2026-09-01 更新）
 
-- [ ] **docs/06 数据模型设计定稿**：表定义 + 短期/长期记忆设计 + 企业级生产架构（PG 主库 + 对象存储 + Redis + pgvector + 只读从库）
-- [ ] **去硬编码**：员工/角色 YAML seed 入库（`employees`/`approver_roles` 表），删 `mock_oa.py` 的 `DIRECTORY`/`ROLE_MAP`
-- [ ] **短期记忆持久化**：MemorySaver → SqliteSaver（HITL 挂起后服务重启可恢复）
-- [ ] **长期记忆拆表**：`invoices` + `approval_records` 拆表 + 发票池真查重（唯一约束防并发双报销）
-- [ ] **PgStorage 适配器**：连本机 PostgreSQL，Demo/测试保留 SQLite
-- [ ] **LLM 接入**：recognize/summarize/classify/compliance 四处接线（无 key 降级现有规则）
-- [ ] **Function Calling 实战**：一个节点真正 `bind_tools` 让 LLM 选工具、回填状态
-- [ ] **政策 RAG 优化**：bge-m3 向量存 pgvector（BM25 混合检索 + rerank），镜像换 `pgvector/pgvector:pg16`
+> 状态来源：项目任务跟踪（`/todos` 会话任务表）。⛓ = 依赖前置。
+
+**本阶段已交付 ✅**
+
+- [x] **#26 docs/06 数据模型定稿**（生产级 PG 表结构 + 记忆 + 异步任务层）
+- [x] **#30/#50 [P1] PgStorage 生产实现 + 拆表 + 发票池查重 + Decimal**（连本机 PG；`invoices`/`approval_records` 拆表；部分唯一索引真查重；存储边界 Decimal）
+- [x] **#31/#45-49 LLM 接入**（recognize/summarize/classify/compliance 四处接线 + 无 key 降级规则路径）
+- [x] **#33/#35-38 政策 RAG 优化**（bge-m3 向量存 pgvector + BM25/向量混合检索 + RRF + 降级）
+- [x] **#39-43 审查修复 4 轮**（接线层 / 检索层 / 业务层 / 配置测试）
+- [x] **#51 [P2] ObjectStorage 抽象 + MinIO**（源文件进对象存储，DB 只存 file_key）
+- [x] **#56-60 企业级日志框架 + 第 4 轮阶段总审修复**（结构化/关联/轮转；F1/F2/F3 + P8 发票池真查重接线）
+
+**待办（按依赖顺序）⬜**
+
+- [ ] **#52 [P3] Celery + Redis 异步任务接线** ← 下一步（submissions 表/接口已就绪，接执行层）
+- [ ] **#53 [P4] 异步 API + 前端轮询 + 重试 + 审核端解耦**（⛓ #52）
+- [ ] **#54 [部署] docker-compose 生产编排 + 端到端验证**（⛓ #52；api+worker+postgres+redis+minio）
+- [ ] **#55 生产税务查验 TaxVerifyProvider 实现**（⛓ #54；替换 Mock 验真）
+- [ ] **#62 审批 SLA：submissions.due_at + Celery beat 催办/升级**（⛓ #52；企业级审批时限兜底，防挂起无限堆积）
+- [ ] **#63 发票报销时限：verify 节点超期校验 + 结构化退回**（独立；企业级业务期限，`invoice_claim_days` 政策可配）
+- [ ] **#27 去硬编码**：员工/角色 YAML seed 入库（`employees`/`approver_roles` 表），删 `mock_oa.py` 的 `DIRECTORY`/`ROLE_MAP`
+- [ ] **#28 短期记忆持久化**：MemorySaver → SqliteSaver（HITL 挂起后服务重启可恢复）
+- [ ] **#32 Function Calling 实战**：一个节点真正 `bind_tools` 让 LLM 选工具、回填状态
+- [ ] **#44 金额 Decimal 全量重构**（进度：存储边界已 Decimal；代码内 float 运算收敛待做）
 
 ---
 

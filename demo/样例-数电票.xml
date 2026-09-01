@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 数电票源文件（示例）—— 报销口径取价税合计 Total；项目"住宿服务费" → 业务类别"酒店发票"
+     真实文件含税局 SM2 数字签名（ds:Signature），本示例仅占位 -->
+<Invoice xmlns="urn:cn:gov:tax:einv" xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+  <InvoiceNo>24402612345678901234</InvoiceNo>
+  <InvoiceCode/>
+  <InvoiceDate>2026-08-31</InvoiceDate>
+  <InvoiceKind>电子发票（普通发票）</InvoiceKind>
+  <BuyerName>北京某某科技有限公司</BuyerName>
+  <BuyerTaxNo>91110108MA01XXXXXX</BuyerTaxNo>
+  <SellerName>上海某某酒店管理有限公司</SellerName>
+  <SellerTaxNo>91310115MA1KXXXXXX</SellerTaxNo>
+  <Amount>471.70</Amount>
+  <TaxAmount>28.30</TaxAmount>
+  <Total>500.00</Total>
+  <TotalInChinese>伍佰元整</TotalInChinese>
+  <InvoiceItems>
+    <InvoiceItem>
+      <Name>住宿服务费</Name>
+      <Quantity>1</Quantity>
+      <Price>500.00</Price>
+      <Amount>500.00</Amount>
+      <TaxRate>0.06</TaxRate>
+    </InvoiceItem>
+  </InvoiceItems>
+  <Remark/>
+  <ds:Signature><ds:SignatureValue>示例占位，真实文件为税局 SM2 签名</ds:SignatureValue></ds:Signature>
+</Invoice>

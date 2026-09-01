@@ -41,4 +41,10 @@ class TravelModule(BusinessModule):
         return ["ocr_tool", "verify_tool", "advance_tool", "notify_tool", "email_tool"]
 
     def build_summary(self, state: dict) -> str:
+        # 业务：真实场景可换 LLM 生成总结；LLM 不可用/无 key → 模板降级，保证可离线运行（docs/03 §3）
+        llm = self._container.llm_tool
+        if llm is not None:
+            text = llm.build_summary(state)
+            if text:
+                return text
         return build_travel_summary(state)

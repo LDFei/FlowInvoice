@@ -3,6 +3,9 @@
 from datetime import datetime
 
 from app.adapters.base import EmailProvider, NotifyProvider, UserProvider, VerifyProvider
+from app.core.logging import get_logger, log_info
+
+logger = get_logger("mock_oa")
 
 # 业务：演示组织架构 —— 员工目录（真实系统从 OA 拉取）
 #       结构：工号 → {姓名/部门/邮箱/直属上级}
@@ -49,14 +52,12 @@ class MockVerifyProvider(VerifyProvider):
 
     def verify(self, invoice_data: dict) -> dict:
         # 业务：真实实现对接税务查验平台 / 企业发票池查重；
-        #      此处规则化保证 Demo 可离线复现失败分支
+        #      此处仅保留真伪规则化（票号含 INVALID 视为验真失败）。
+        #      查重不再用 DUP 子串标记——已由发票池真库接管（verify 节点 add_invoice 唯一索引拦截，见 travel/nodes.py）
         invoice_no = str(invoice_data.get("invoice_no", ""))
-        verified = "INVALID" not in invoice_no
-        return {
-            "verified": verified,
-            "duplicate": False,
-            "note": "票面信息一致、未查重到历史报销" if verified else "验真失败：票号疑似无效",
-        }
+        if "INVALID" in invoice_no:
+            return {"verified": False, "duplicate": False, "note": "验真失败：票号疑似无效"}
+        return {"verified": True, "duplicate": False, "note": "票面信息一致（真伪通过；查重走发票池）"}
 
 
 class MockNotifyProvider(NotifyProvider):
@@ -66,9 +67,9 @@ class MockNotifyProvider(NotifyProvider):
         self._storage = storage
 
     def send(self, request_id: str, to_role: str, title: str, content: str) -> None:
-        # 作用：控制台打印 + 写入 messages 表
+        # 作用：结构化日志 + 写入 messages 表
         # 业务：真实实现调用钉钉/企微/站内信；留痕供驾驶舱/审核端展示
-        print(f"[通知] {to_role} | {title}\n    {content}")
+        log_info(logger, f"[通知] {to_role} | {title}\n    {content}", to_role=to_role, title=title)
         self._storage.add_message(request_id, to_role, f"{title}\n{content}")
 
 
@@ -79,7 +80,7 @@ class MockEmailProvider(EmailProvider):
         self._storage = storage
 
     def send(self, request_id: str, to: str, subject: str, body: str) -> None:
-        # 作用：控制台打印 + 写入 emails 表
+        # 作用：结构化日志 + 写入 emails 表
         # 业务：真实实现走邮件网关
-        print(f"[邮件] → {to} | {subject}\n    {body}")
+        log_info(logger, f"[邮件] → {to} | {subject}\n    {body}", to=to, subject=subject)
         self._storage.add_email(request_id, to, subject, body)

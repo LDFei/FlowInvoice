@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
+from app.adapters.base import ObjectStorage
 from app.core.config import UPLOAD_DIR
 
 
@@ -13,8 +14,9 @@ from app.core.config import UPLOAD_DIR
 class InvoiceInput:
     """统一发票输入 DTO（业务无关，屏蔽来源差异）"""
 
-    file_path: str                    # 作用：上传文件落盘路径，供 OCR 工具读取
-    direction: str                    # 业务：travel/procurement... 申报时选择，供路由与事前申请匹配
+    file_path: str                    # 作用：上传文件落盘路径（本地临时，供 OCR 工具读取）
+    object_key: str = ""              # 作用：源文件对象存储 key（MinIO/本地替身，持久副本，DB 存它）
+    direction: str = ""               # 业务：travel/procurement... 申报时选择，供路由与事前申请匹配
     purpose: str = ""                 # 业务：报销事由，供 Agent 总结与合规判断参考
     declared_amount: float = 0.0      # 业务：申报金额（税前）；与 OCR 抽取金额比对，不一致→风险标记
     payment_method: str = "personal"  # 业务：personal=员工垫付（财务补钱）/ corporate=对公付款（付供应商）
@@ -30,15 +32,22 @@ class InvoiceInput:
 class Uploader:
     """发票上传解析器（跨业务复用）"""
 
+    def __init__(self, object_storage: ObjectStorage):
+        # 作用：注入对象存储——源文件持久副本进对象存储，本地临时文件仅供 OCR 读取（docs/06 Phase 2）
+        self._objects = object_storage
+
     def save_and_parse(self, file_storage, filename: str, **meta) -> InvoiceInput:
-        """落盘文件 → 构造标准 DTO"""
-        # 作用：把上传文件写到临时目录，返回统一 DTO；后续流程只认 InvoiceInput
-        # 业务：屏蔽"发票来源/格式"差异（图片/PDF/电子票）；新增业务无需改动此层
+        """持久化源文件 → 落 OCR 临时文件 → 构造标准 DTO"""
+        # 业务：屏蔽"发票来源/格式"差异（图片/PDF/电子票）；新增业务无需改动此层。
+        #       本地临时文件（UPLOAD_DIR）是处理缓存，源文件权威副本在对象存储（file_key 可重建）
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         # 作用：带时间戳+原文件名去重命名，避免同名覆盖
-        saved = UPLOAD_DIR / f"{datetime.now():%Y%m%d%H%M%S%f}_{Path(filename).name}"
-        # 作用：流式写文件（FastAPI UploadFile 是文件对象）
+        key = f"{datetime.now():%Y%m%d%H%M%S%f}_{Path(filename).name}"
+        saved = UPLOAD_DIR / key
+        # 作用：流式写本地临时文件（FastAPI UploadFile 是文件对象）
         with saved.open("wb") as out:
             shutil.copyfileobj(file_storage, out)
+        # 作用：源文件持久副本进对象存储（幂等覆盖；MinIO 桶 / 本地目录）
+        self._objects.put(key, saved.read_bytes())
         # 作用：meta 中 employee_id/app_id/purpose 等原样透传
-        return InvoiceInput(file_path=str(saved), **meta)
+        return InvoiceInput(file_path=str(saved), object_key=key, **meta)

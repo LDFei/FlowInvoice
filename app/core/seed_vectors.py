@@ -4,13 +4,16 @@
 #       python -m app.core.seed_vectors
 #       国内网络可先 export HF_ENDPOINT=https://hf-mirror.com 加速模型下载
 from app.core.config import CLAUSES_DIR, RAG_VECTOR_DSN
+from app.core.logging import get_logger, log_info, log_warning
 from app.shared.policies.rag import PolicyIndex
 from app.shared.policies.vector_store import PolicyVectorStore
+
+logger = get_logger("seed_vectors")
 
 
 def main() -> None:
     if not RAG_VECTOR_DSN:
-        print("未设置 FLOWINVOICE_PG_DSN，跳过向量种子（纯 BM25 模式）")
+        log_warning(logger, "未设置 FLOWINVOICE_PG_DSN，跳过向量种子（纯 BM25 模式）")
         return
     store = PolicyVectorStore(RAG_VECTOR_DSN)
     store.ensure_schema()
@@ -20,9 +23,9 @@ def main() -> None:
         {"clause_id": c.clause_id, "source": c.source, "text": c.text}
         for c in index.chunks
     ]
-    print(f"切块 {len(clauses)} 条，开始 bge-m3 向量化并入库（首次会下载模型）...")
+    log_info(logger, "切块完成，开始 bge-m3 向量化并入库（首次会下载模型）", count=len(clauses))
     store.seed(clauses)
-    print(f"完成：policy_chunks 已写入 {len(clauses)} 条")
+    log_info(logger, "policy_chunks 向量写入完成", count=len(clauses))
 
 
 if __name__ == "__main__":

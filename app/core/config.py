@@ -3,9 +3,15 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # 作用：项目根目录 = 本文件向上两级（app/core -> app -> 项目根）
 # 业务：无论从哪个目录启动服务，路径都稳定指向项目根
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# 作用：加载项目根 .env（本地开发环境变量：数据库 DSN、LLM Key 等）
+# 业务：有 .env 就注入环境变量；默认不覆盖已存在的系统变量（系统变量优先）
+load_dotenv(PROJECT_ROOT / ".env")
 
 # 作用：运行期数据目录（数据库 / 上传临时文件）
 # 业务：本地 Demo 落盘于此；后续可替换为对象存储 / 独立数据库
@@ -14,6 +20,10 @@ DATA_DIR = PROJECT_ROOT / "data"
 # 作用：上传文件临时目录
 # 业务：Uploader 落盘后交给 OCR 工具读取
 UPLOAD_DIR = DATA_DIR / "uploads"
+
+# 作用：对象存储本地替身目录（无 MinIO 环境时 LocalObjectStorage 落盘于此）
+# 业务：发票源文件持久副本（docs/06 Phase 2：文件不进 DB，只存 file_key）
+OBJECT_DIR = DATA_DIR / "objects"
 
 # 作用：SQLite 数据库文件
 # 业务：请求/事前申请/消息/邮件统一持久化于此
@@ -27,17 +37,29 @@ POLICY_DIR = PROJECT_ROOT / "app" / "policy"
 # 业务：差旅/招待/票据/通用原则等条款，按场景检索作"依据"（docs/03 §3）
 CLAUSES_DIR = POLICY_DIR / "clauses"
 
-# 作用：是否启用制度条款 RAG 检索
-# 业务：可整体开关；关闭时合规节点只做确定性检查
-RAG_ENABLED = True
+# 作用：是否启用制度条款 RAG 检索（env 可关：FLOWINVOICE_RAG_ENABLED=0/false）
+# 业务：关闭时合规节点只做确定性检查
+RAG_ENABLED = os.environ.get("FLOWINVOICE_RAG_ENABLED", "1").lower() in ("1", "true", "yes")
 
 # 作用：每次检索返回的条款条数
 RAG_TOP_K = 3
 
-# 作用：政策条款向量检索的 PostgreSQL DSN（pgvector）
-# 业务：设置后启用"BM25 + bge-m3 向量"混合检索（docs/03 §3）；
-#       为空则只走 BM25（无外部依赖，默认可跑）
-RAG_VECTOR_DSN = os.environ.get("FLOWINVOICE_PG_DSN", "")
+# 作用：主存储的 PostgreSQL DSN（生产主库：requests/submissions/invoices/审批记录，docs/06）
+# 业务：设置后容器装配 PgStorage（生产），为空则 SqliteStorage（测试/离线替身）
+STORAGE_DSN = os.environ.get("FLOWINVOICE_PG_DSN", "")
+
+# 作用：政策条款向量检索的 PostgreSQL DSN（pgvector，独立可配）
+# 业务：设置后启用"BM25 + bge-m3 向量"混合检索（docs/03 §3）；为空则只走 BM25。
+#       默认回退到主库 DSN（一个 PG 即可两用）；单独设置即可"主库留 SQLite、只开向量 RAG"
+#       ——与 STORAGE_DSN 解耦（docs/11 F2），避免一变量三用无法拆分
+RAG_VECTOR_DSN = os.environ.get("FLOWINVOICE_RAG_VECTOR_DSN", "") or STORAGE_DSN
+
+# 作用：LLM 接入配置（DeepSeek，OpenAI 兼容 Chat Completions 接口）
+# 业务：无 key 时全链路自动降级确定性路径（规则/正则/模板），Demo 仍可离线运行
+#       （LLM 只做"理解与表达"，不碰钱的判定，见 docs/03 §3 混合决策）
+LLM_API_KEY = os.environ.get("FLOWINVOICE_LLM_API_KEY", "")
+LLM_MODEL = os.environ.get("FLOWINVOICE_LLM_MODEL", "deepseek-v4-flash")
+LLM_BASE_URL = os.environ.get("FLOWINVOICE_LLM_BASE_URL", "https://api.deepseek.com")
 
 # 作用：金额误差容差（申报金额 vs 票面金额 差异比例）
 # 业务：超过该比例 → 打风险标记，提示申报人填写有误
@@ -46,6 +68,24 @@ AMOUNT_DIFF_THRESHOLD = 0.05
 # 作用：演示员工号（Demo 不接登录，固定申报人）
 # 业务：真实系统由登录态注入；此处简化便于跑通闭环
 DEMO_EMPLOYEE_ID = "1001"
+
+# ===== 对象存储 MinIO（app/adapters/object_storage.py，docs/06 Phase 2） =====
+# 作用：发票源文件对象存储后端（MinIO/S3 兼容）
+# 业务：设置 ENDPOINT 启用 MinIO（生产）；为空 → 本地目录替身（测试/离线）
+MINIO_ENDPOINT = os.environ.get("FLOWINVOICE_MINIO_ENDPOINT", "")
+MINIO_ACCESS_KEY = os.environ.get("FLOWINVOICE_MINIO_ACCESS_KEY", "")
+MINIO_SECRET_KEY = os.environ.get("FLOWINVOICE_MINIO_SECRET_KEY", "")
+MINIO_BUCKET = os.environ.get("FLOWINVOICE_MINIO_BUCKET", "flowinvoice")
+MINIO_SECURE = os.environ.get("FLOWINVOICE_MINIO_SECURE", "0").lower() in ("1", "true", "yes")
+
+
+# ===== 技术日志（app/core/logging.py，docs/07） =====
+# 作用：日志级别 / 目录 / 轮转大小 / 备份份数
+# 业务：生产按需调级别（如 FLOWINVOICE_LOG_LEVEL=DEBUG 排查），轮转防磁盘无限增长
+LOG_LEVEL = os.environ.get("FLOWINVOICE_LOG_LEVEL", "INFO").upper()
+LOG_DIR = Path(os.environ.get("FLOWINVOICE_LOG_DIR", str(PROJECT_ROOT / "logs")))
+LOG_MAX_BYTES = int(os.environ.get("FLOWINVOICE_LOG_MAX_BYTES", str(10 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(os.environ.get("FLOWINVOICE_LOG_BACKUP_COUNT", "5"))
 
 
 def ensure_dirs() -> None:

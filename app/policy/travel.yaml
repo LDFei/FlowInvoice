@@ -1,7 +1,8 @@
 # app/policy/travel.yaml —— 差旅政策规则（配置驱动，不写死在代码）
 # 业务：企业差旅制度数字化；改动制度只需改 YAML，不动代码（docs/AGENTS.md §9）
 
-hotel_daily_limit: 500          # 住宿每日上限（元）
+hotel_daily_limit: 300          # 住宿每日上限（元）—— 对齐条款 3.2「普通员工一线城市 300 元/晚」口径
+                                # 简化检查：发票无天数字段，按发票总额近似（真实应按 每日×天数，需结构化数据）
 transport_standard: economy     # 交通标准：economy=经济舱/二等座
 advance_required: true          # 差旅是否必须事前申请
 advance_valid_days: 30          # 出差申请有效期（天，申请结束日期后顺延）

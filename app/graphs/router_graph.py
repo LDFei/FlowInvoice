@@ -7,7 +7,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from app.core.logging import get_logger, log_debug
 from app.core.state import ReimbursementState
+
+logger = get_logger("router_graph")
 
 
 def build_router_graph(container):
@@ -20,19 +23,24 @@ def build_router_graph(container):
 
     def classify(state: dict) -> dict:
         """分类路由节点：确定业务方向"""
-        # 业务：LLM 决策 + 规则兜底（面试点：何时用 LLM 分类、何时用规则）——真实场景由 LLM classify，此处按申报人指定方向 + 注册表校验
+        # 业务：LLM 决策 + 规则兜底——方向合法直接走规则；方向缺失/不匹配时 LLM 从申报内容推断，
+        #       且结果必须回落注册表校验（防幻觉发明新业务类型），否则按未知业务退回
         direction = state["invoice_input"].get("direction", "")
         if direction in businesses:
             return {"business_type": direction}
-        return {
-            "business_type": "",
-            "return_reason": {
-                "category": "unknown_business",
-                "message": f"无法识别业务类型（direction={direction}）",
-                "suggestion": "请选择正确的报销业务类型",
-            },
-            "process_status": "returned",
+        llm = getattr(container, "llm_tool", None)
+        if llm is not None:
+            guess = llm.classify_direction(state, list(businesses))
+            if guess:
+                return {"business_type": guess}
+        reason = {
+            "category": "unknown_business",
+            "message": f"无法识别业务类型（direction={direction}）",
+            "suggestion": "请选择正确的报销业务类型",
         }
+        # 作用：与退回/作废节点一致，未知业务也通知报销人（可修改方向重提）
+        notify.notify_submitter(state["request_id"], {**state, "return_reason": reason})
+        return {"business_type": "", "return_reason": reason, "process_status": "returned"}
 
     def route_to_business(state: dict) -> dict:
         """调用业务子图（同步 invoke，结果合并回父状态）"""
@@ -85,14 +93,17 @@ def build_router_graph(container):
     def _record(state: dict, role: str, action: str) -> list:
         """追加一条决策执行记录（审计留痕 / 可观测性，驾驶舱统计的数据基础）"""
         decision = state.get("decision", {})
-        records = list(state.get("approval_records", []))
-        records.append({
+        record = {
             "role": role,
             "decision": action,
             "actor": decision.get("actor", "system"),
             "comment": decision.get("comment", ""),
             "time": datetime.now().isoformat(timespec="seconds"),
-        })
+        }
+        records = list(state.get("approval_records", []))
+        records.append(record)
+        # 拆表落库（docs/06 §5：approval_records 表为权威，与 state 历史并存供驾驶舱/审计查询）
+        container.storage.add_approval_record(state["request_id"], record)
         return records
 
     def approve_node(state: dict) -> dict:
@@ -217,7 +228,7 @@ def build_router_graph(container):
 
     # 作用：必须启用 checkpointer，interrupt() 才能跨调用暂停/恢复
     graph = builder.compile(checkpointer=MemorySaver())
-    gr = graph.get_graph()
-    print(gr.draw_mermaid())                                          # ① 图结构（mermaid，可粘贴 mermaid.live 看渲染）
-    print({n: builder.nodes[n].runnable.func.__name__ for n in builder.nodes})  # ② 内部：节点 -> 函数
+    # 作用：图结构调试信息只在 DEBUG 级别输出（FLOWINVOICE_LOG_LEVEL=DEBUG 时可见，避免每次构建刷屏）
+    log_debug(logger, "图结构（mermaid）", mermaid=graph.get_graph().draw_mermaid())
+    log_debug(logger, "图节点 → 实现函数", mapping={n: builder.nodes[n].runnable.func.__name__ for n in builder.nodes})
     return graph

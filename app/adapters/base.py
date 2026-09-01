@@ -92,3 +92,77 @@ class StorageProvider(ABC):
     @abstractmethod
     def list_emails(self, request_id: str) -> list[dict]:
         """列出某请求的邮件记录"""
+
+    # ================= 异步任务（submissions，docs/06 §2） =================
+
+    @abstractmethod
+    def create_submission(self, request_id: str, snapshot: dict, status: str = "pending") -> None:
+        """提交时落任务行：快照 = 原始输入（file_key + 表单），支持重放"""
+
+    @abstractmethod
+    def get_submission(self, request_id: str) -> dict | None:
+        """按单号取任务状态（前端轮询）"""
+
+    @abstractmethod
+    def update_submission(
+        self,
+        request_id: str,
+        *,
+        status: str | None = None,
+        error: dict | None = None,
+        attempts: int | None = None,
+    ) -> None:
+        """更新任务状态/失败原因/重试计数"""
+
+    @abstractmethod
+    def list_submissions(self, status: str | None = None) -> list[dict]:
+        """任务列表（可按状态过滤，worker 领单/启动恢复用）"""
+
+    @abstractmethod
+    def reset_stuck_submissions(self) -> int:
+        """启动恢复：processing → pending（上次进程崩溃），返回重置数"""
+
+    # ================= 发票池（真查重，docs/06 §3.1） =================
+
+    @abstractmethod
+    def add_invoice(self, invoice: dict) -> bool:
+        """票号入池（status=active）；True=入池成功，False=同票号 active 冲突（查重拦截）"""
+
+    @abstractmethod
+    def release_invoice(self, request_id: str) -> None:
+        """请求进入 returned/voided 终态 → 票号释放（active→released，可再次提交）"""
+
+    @abstractmethod
+    def find_invoice(self, invoice_no: str) -> dict | None:
+        """按票号查占用中的发票（查重命中返回占用行）"""
+
+    # ================= 审批记录（审计拆表，docs/06 §2） =================
+
+    @abstractmethod
+    def add_approval_record(self, request_id: str, record: dict) -> None:
+        """追加一条审批执行记录（审计/驾驶舱数据源）"""
+
+    @abstractmethod
+    def list_approval_records(self, request_id: str) -> list[dict]:
+        """列出某请求的审批记录"""
+
+
+class ObjectStorage(ABC):
+    """发票源文件对象存储（MinIO/S3，docs/06 Phase 2）
+    key 即定位符：DB 只存 file_key，文件本体不进数据库（存对象存储）"""
+
+    @abstractmethod
+    def put(self, key: str, content: bytes) -> str:
+        """写入对象（幂等覆盖），返回对象 key"""
+
+    @abstractmethod
+    def get(self, key: str) -> bytes:
+        """读取对象内容"""
+
+    @abstractmethod
+    def exists(self, key: str) -> bool:
+        """对象是否存在"""
+
+    @abstractmethod
+    def delete(self, key: str) -> None:
+        """删除对象（幂等，不存在不报错）"""
