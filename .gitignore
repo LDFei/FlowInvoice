@@ -28,6 +28,10 @@ data/
 logs/
 *.log
 
+# ---- 测试（本地维护，不进公开仓库） ----
+tests/
+pytest.ini
+
 # ---- IDE / 编辑器 ----
 .vscode/
 .idea/

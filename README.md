@@ -121,8 +121,7 @@ flowinvoice/
 │   ├── core/                 # 通用基础（config/state/uploader）
 │   ├── registry.py           # 业务模块注册表
 │   └── policy/               # 政策规则配置（YAML）
-├── frontend/                 # 前端 SPA（报销端/审核端/管理端）
-└── tests/
+└── frontend/                 # 前端 SPA（报销端/审核端/管理端）
 ```
 
 ---
@@ -194,21 +193,13 @@ npm run dev      # 启动开发服务器
 
 > **角色即登录态**：Demo 无登录/SSO，用顶栏角色下拉模拟员工视角；后端按「角色 × 步骤」做权限校验，越权操作会被 403/400 拦截。
 
-### 4. 运行测试
-
-```bash
-pytest                    # 全部单测 + 集成测试（含权限越权用例）
-pytest tests/test_api.py  # 只跑 API 层
-```
-
-### 5. 其他启动方式（PyCharm）
+### 4. 其他启动方式（PyCharm）
 
 仓库自带共享运行配置（`.idea/runConfigurations/`），直接用 PyCharm 打开后一键运行：
 
 | 配置 | 作用 |
 |------|------|
 | `FlowInvoice_server` | 以模块方式运行 uvicorn（等同第 1 步，需先切换到 `FlowInvoice` 解释器） |
-| `FlowInvoice_tests` | 运行 pytest |
 
 ---
 
