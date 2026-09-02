@@ -32,6 +32,15 @@ logs/
 tests/
 pytest.ini
 
+# ---- 文档 05-11（本地维护：面试/数据模型/Bug 复盘/审核记录/简历，不进公开仓库） ----
+docs/05-*.md
+docs/06-*.md
+docs/07-*.md
+docs/08-*.md
+docs/09-*.md
+docs/10-*.md
+docs/11-*.md
+
 # ---- IDE / 编辑器 ----
 .vscode/
 .idea/
