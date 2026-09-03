@@ -20,11 +20,27 @@ services:
       timeout: 3s
       retries: 10
 
+  redis:
+    image: redis:7-alpine                  # Celery broker（#52 异步任务：提交→处理→挂起 进 worker）
+    container_name: flowinvoice-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data                    # AOF 持久化（消息队列重启不丢单）
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # —— 后续按企业级方案逐步扩展（docs/06 生产架构）——
-  # redis:   缓存 / 发票池查重快速集
   # minio:   发票源文件对象存储（XML/OFD/PDF/图片，DB 只存 object key）
   # api:     应用服务（后端 + 前端）
+  # worker:  Celery worker（异步模式：celery -A app.celery_app worker）
   # pgadmin: 可视化管理（可选，起单次会话看数据用）
 
 volumes:
   pgdata:                                 # 命名卷：数据生命周期独立于容器
+  redisdata:                              # Redis AOF 数据卷（异步任务消息）

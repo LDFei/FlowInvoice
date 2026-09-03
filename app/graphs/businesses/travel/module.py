@@ -18,7 +18,7 @@ class TravelModule(BusinessModule):
 
     def build_graph(self):
         # 作用：构建并编译差旅子图（缓存，避免每次 invoke 重复编译）
-        # 业务：子图节点链 = 识别→验真→事前申请→合规→审批链
+        # 业务：子图节点链 = 识别→验真→发票合规确定性闸门(票种/抬头/时限)→事前申请→合规(软闸门)→审批链
         if getattr(self, "_graph", None) is None:
             nodes = build_travel_nodes(self._container)
             self._graph = build_subgraph(
@@ -26,6 +26,7 @@ class TravelModule(BusinessModule):
                 [
                     ("recognize", nodes["recognize"]),
                     ("verify", nodes["verify"]),
+                    ("check_invoice_compliance", nodes["check_invoice_compliance"]),
                     ("match_advance", nodes["match_advance"]),
                     ("check_compliance", nodes["check_compliance"]),
                     ("build_approval_chain", nodes["build_approval_chain"]),

@@ -5,6 +5,8 @@
 # ---- Agent 编排 ----
 langgraph>=0.4            # 图编排：总控图 / 业务子图 / HITL interrupt
 langchain-core>=0.3       # LangChain 核心：Runnable / State Schema 基础
+langgraph-checkpoint-postgres>=2.0  # 持久化 checkpoint（跨进程 HITL 恢复，docs/06 异步层；需与 langgraph-checkpoint 兼容）
+langgraph-checkpoint-sqlite>=2.0    # SQLite 版持久化 checkpoint（本地异步模式替身；生产用 Postgres 版）
 
 # ---- Web 接口 ----
 fastapi>=0.115            # REST API：报销提交 / 审批决策 / 状态查询
@@ -23,6 +25,15 @@ pgvector>=0.2             # pgvector 向量类型适配（psycopg3 注册）
 
 # ---- 对象存储（发票源文件，docs/06 Phase 2） ----
 minio>=7.2                # MinIO/S3 客户端（仅生产配置端点后引入；本地目录替身无需）
+
+# ---- 异步任务（提交→处理→挂起 进 worker，docs/06 异步任务层） ----
+celery>=5.4,<6            # 分布式任务队列：worker 进程执行图管线（#52 接线）
+redis>=5,<7               # Redis broker：Celery 消息队列 + 可选结果后端
+
+# ---- 发票识别闭环（docs/04 §3：5 层管线，L3 PDF + L5 OCR） ----
+PyMuPDF>=1.24             # PDF 解析：内嵌 XML 附件 / 文本层 / 扫描件渲染成图（L3）
+paddleocr>=3.0            # 图片/扫描件 OCR（L5，PP-OCRv6；惰性加载——未装则图片识别明确报错，核心格式不受影响）
+paddlepaddle>=3.3.0       # Paddle 运行时（Windows/Py3.13 需 3.3.0+；Paddle 3.3 须关 MKLDNN，见 docs/04 §3.3）
 
 # ---- 开发 / 测试 ----
 pytest>=8.0               # 单元 / 集成测试

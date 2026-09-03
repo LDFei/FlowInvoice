@@ -4,6 +4,16 @@
 /** 流程状态 */
 export type ProcessStatus = "in_review" | "returned" | "approved" | "paid" | "voided";
 
+/** 异步提交任务状态（#53：202 受理后前端轮询用；与后端 schemas.SubmissionStatus 对应） */
+export interface SubmissionStatus {
+  request_id: string;
+  status: "pending" | "processing" | "succeeded" | "failed";
+  attempts: number;
+  error: { type: string; message: string } | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** 当前挂起点 */
 export type CurrentStep = "review" | "leader_decision" | "done" | "";
 
@@ -43,6 +53,10 @@ export interface AdvanceApplication {
   purpose: string;
   status: string;
   created_at: string;
+  /** 已占用合计（approved 报销单按票面累计；列表/匹配时附带） */
+  reserved_amount?: number;
+  /** 剩余额度 = 预估 - 已占用（可为负=超支；列表附带，详情/匹配结果可自行算） */
+  remaining_amount?: number;
 }
 
 /** 票面信息 */

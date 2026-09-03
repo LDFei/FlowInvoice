@@ -7,7 +7,7 @@ def build_travel_summary(state: dict) -> str:
         f"发票类型：{invoice.get('invoice_type', '未知')}",
         f"票面金额：¥{invoice['amount']:,.2f}",
         f"验真：{state['verification']['note']}",
-        f"事前申请：{state.get('advance_application', {}).get('app_id', '无')}",
+        f"事前申请：{(state.get('advance_application') or {}).get('app_id', '无')}",
     ]
     # 作用：逐条列出合规检查结果
     for check in state.get("compliance_checks", []):

@@ -5,7 +5,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from app.adapters.base import StorageProvider
+from app.adapters.base import StorageProvider, is_todo_for
 from app.core.json_codec import dumps as _json_dumps
 
 # 作用：psycopg / psycopg_pool 惰性导入——纯 SQLite 离线运行不强制依赖 PG 栈（同 vector_store 范式）
@@ -43,10 +43,49 @@ CREATE TABLE IF NOT EXISTS invoices (
     title        TEXT,
     file_key     TEXT,
     status       TEXT NOT NULL DEFAULT 'active',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- 识别闭环扩展（docs/04 §3.1）：全量票面信息，为验真/抵扣/合规留位
+    buyer_name    TEXT,
+    buyer_tax_no  TEXT,
+    seller_name   TEXT,
+    seller_tax_no TEXT,
+    tax_amount    NUMERIC(14,2),
+    tax_rate      TEXT,
+    check_code    TEXT,
+    has_signature TEXT,
+    remark        TEXT,
+    issuer        TEXT,
+    source        TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_active_no ON invoices (invoice_no) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_invoices_request ON invoices (request_id);
+-- 存量库迁移（幂等）：老 invoices 表补识别闭环扩展列，兼容已落库的开发库
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS buyer_name TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS buyer_tax_no TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS seller_name TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS seller_tax_no TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(14,2);
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tax_rate TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS check_code TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS has_signature TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS remark TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS issuer TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS source TEXT;
+
+CREATE TABLE IF NOT EXISTS invoice_items (
+    id         BIGSERIAL PRIMARY KEY,
+    invoice_no TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    name       TEXT,
+    spec       TEXT,
+    unit       TEXT,
+    quantity   NUMERIC(14,4),
+    unit_price NUMERIC(14,2),
+    amount     NUMERIC(14,2),
+    tax_rate   TEXT,
+    tax_amount NUMERIC(14,2)
+);
+CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items (invoice_no);
 
 CREATE TABLE IF NOT EXISTS approval_records (
     id         BIGSERIAL PRIMARY KEY,
@@ -72,6 +111,14 @@ CREATE TABLE IF NOT EXISTS advance_applications (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_advance_direction ON advance_applications (employee_id, direction, status);
+
+CREATE TABLE IF NOT EXISTS advance_reservations (
+    request_id TEXT PRIMARY KEY,   -- 一笔报销只占一次预算（decide+pay 双调幂等，docs/06 预算台账）
+    app_id     TEXT NOT NULL,
+    amount     NUMERIC(14,2) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reservations_app ON advance_reservations (app_id);
 
 CREATE TABLE IF NOT EXISTS messages (
     id         BIGSERIAL PRIMARY KEY,
@@ -191,7 +238,14 @@ class PgStorage(StorageProvider):
             ).fetchone()
             return row["state_json"] if row else None  # JSONB 自动反序列化为 dict
 
-    def list_requests(self, status: str | None = None) -> list[dict]:
+    def list_requests(
+        self,
+        status: str | None = None,
+        *,
+        employee_id: str | None = None,
+        approver_id: str | None = None,
+    ) -> list[dict]:
+        # 业务：#70 数据隔离——employee_id="我的单据"；approver_id="我的待办"（按当前步骤审批人过滤）
         with self._conn() as conn:
             sql = "SELECT * FROM requests"
             params: tuple = ()
@@ -204,7 +258,7 @@ class PgStorage(StorageProvider):
         for row in rows:
             state = row["state_json"]
             invoice = state.get("invoice_data") or {}
-            summaries.append({
+            summary = {
                 "request_id": row["request_id"],
                 "status": row["status"],
                 "current_step": row["current_step"],
@@ -213,7 +267,12 @@ class PgStorage(StorageProvider):
                 "employee_id": state.get("invoice_input", {}).get("employee_id", ""),
                 "created_at": row["created_at"].isoformat(),
                 "updated_at": row["updated_at"].isoformat(),
-            })
+            }
+            if employee_id and summary["employee_id"] != employee_id:
+                continue
+            if approver_id and not is_todo_for(state, approver_id):
+                continue
+            summaries.append(summary)
         return summaries
 
     # ================= 事前申请 =================
@@ -246,20 +305,26 @@ class PgStorage(StorageProvider):
             return d
 
     def find_active_advance(self, employee_id: str, direction: str, on_date: str) -> dict | None:
+        rows = self.find_active_advances(employee_id, direction, on_date)
+        return rows[0] if rows else None
+
+    def find_active_advances(self, employee_id: str, direction: str, on_date: str) -> list[dict]:
+        # 业务：列出区间覆盖该日期的全部有效申请（按创建先后）——自动匹配要判定"是否唯一命中"，歧义交还报销人（#97）
         with self._conn() as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 """SELECT * FROM advance_applications
                    WHERE employee_id = %s AND direction = %s AND status = 'active'
                      AND start_date <= %s AND end_date >= %s AND valid_until >= %s
-                   ORDER BY created_at ASC LIMIT 1""",
+                   ORDER BY created_at ASC""",
                 (employee_id, direction, on_date, on_date, on_date),
-            ).fetchone()
-            if not row:
-                return None
+            ).fetchall()
+        out = []
+        for row in rows:
             d = dict(row)
             d["estimated_amount"] = _to_float(d.get("estimated_amount"))
             d["created_at"] = d["created_at"].isoformat()
-            return d
+            out.append(d)
+        return out
 
     def list_advances(self, status: str | None = None) -> list[dict]:
         with self._conn() as conn:
@@ -277,6 +342,31 @@ class PgStorage(StorageProvider):
             d["created_at"] = d["created_at"].isoformat()
             out.append(d)
         return out
+
+    def reserve_advance(self, app_id: str, amount: float, request_id: str) -> float:
+        """预算占用记账（原子幂等）：request_id 主键去重——同单重复 reserve 只占一次"""
+        # 业务：占用=台账插一行（同事务后读回累计），无 UPDATE 竞态/漂移；
+        #       approved/paid 双入口都调此方法，靠主键保证只累计一次
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO advance_reservations (request_id, app_id, amount)
+                   VALUES (%s, %s, %s) ON CONFLICT (request_id) DO NOTHING""",
+                (request_id, app_id, amount),
+            )
+            row = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM advance_reservations WHERE app_id = %s",
+                (app_id,),
+            ).fetchone()
+            conn.commit()
+            return _to_float(row["total"])
+
+    def sum_advance_reservations(self, app_id: str) -> float:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM advance_reservations WHERE app_id = %s",
+                (app_id,),
+            ).fetchone()
+            return _to_float(row["total"])
 
     # ================= 通知 / 邮件留痕 =================
 
@@ -394,24 +484,59 @@ class PgStorage(StorageProvider):
             conn.commit()
             return cur.rowcount
 
+    def claim_submission(self, request_id: str) -> bool:
+        # 作用：WHERE status='pending' 原子领取；RETURNING 有行=领取成功（重复投递/并发 worker 幂等）
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE submissions SET status = 'processing', updated_at = %s WHERE request_id = %s AND status = 'pending' RETURNING request_id",
+                (_now(), request_id),
+            )
+            conn.commit()
+            return cur.fetchone() is not None
+
     # ================= 发票池（真查重） =================
 
     def add_invoice(self, invoice: dict) -> bool:
         # 作用：active 票号部分唯一索引拦截重复 → UniqueViolation → False
+        # 业务：同事务写全量票面信息 + 明细子表（invoice_items，一对多，docs/04 §3.1）
         from psycopg.errors import UniqueViolation
 
         try:
             with self._conn() as conn:
                 conn.execute(
-                    """INSERT INTO invoices (invoice_no, request_id, invoice_type, date, amount, title, file_key, status, created_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'active', %s)""",
+                    """INSERT INTO invoices (invoice_no, request_id, invoice_type, date, amount, title, file_key,
+                                             status, created_at, buyer_name, buyer_tax_no, seller_name,
+                                             seller_tax_no, tax_amount, tax_rate, check_code, has_signature,
+                                             remark, issuer, source)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (
                         invoice["invoice_no"], invoice.get("request_id", ""),
                         invoice.get("invoice_type", ""), invoice.get("date", ""),
                         str(invoice.get("amount", "")), invoice.get("title", ""),
                         invoice.get("file_key", ""), _now(),
+                        invoice.get("buyer_name"), invoice.get("buyer_tax_no"),
+                        invoice.get("seller_name"), invoice.get("seller_tax_no"),
+                        str(invoice["tax_amount"]) if invoice.get("tax_amount") is not None else None,
+                        invoice.get("tax_rate"), invoice.get("check_code"),
+                        "1" if invoice.get("has_signature") else "0",
+                        invoice.get("remark"), invoice.get("issuer"), invoice.get("source"),
                     ),
                 )
+                for item in invoice.get("line_items", []):
+                    conn.execute(
+                        """INSERT INTO invoice_items (invoice_no, request_id, name, spec, unit,
+                                                      quantity, unit_price, amount, tax_rate, tax_amount)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (
+                            invoice["invoice_no"], invoice.get("request_id", ""),
+                            item.get("name"), item.get("spec"), item.get("unit"),
+                            str(item.get("quantity")) if item.get("quantity") is not None else None,
+                            str(item.get("unit_price")) if item.get("unit_price") is not None else None,
+                            str(item.get("amount")) if item.get("amount") is not None else None,
+                            str(item.get("tax_rate")) if item.get("tax_rate") is not None else None,
+                            str(item.get("tax_amount")) if item.get("tax_amount") is not None else None,
+                        ),
+                    )
                 conn.commit()
                 return True
         except UniqueViolation:
@@ -424,6 +549,13 @@ class PgStorage(StorageProvider):
                 (request_id,),
             )
             conn.commit()
+
+    def find_invoice_items(self, invoice_no: str) -> list:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM invoice_items WHERE invoice_no = %s", (invoice_no,),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def find_invoice(self, invoice_no: str) -> dict | None:
         with self._conn() as conn:

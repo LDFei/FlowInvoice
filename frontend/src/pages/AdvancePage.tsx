@@ -8,8 +8,9 @@ import { useRole } from "../context/RoleContext";
 
 const ADVANCE_STATUS: Record<string, { color: string; label: string }> = {
   active: { color: "green", label: "有效" },
-  used: { color: "blue", label: "已核销" },
   expired: { color: "default", label: "已过期" },
+  // used 仅兼容旧库遗留数据（预算池模型下不再自动置，#91）
+  used: { color: "blue", label: "已核销(旧)" },
 };
 
 export function AdvancePage() {
@@ -20,7 +21,7 @@ export function AdvancePage() {
 
   const load = async () => {
     try {
-      setItems(await listAdvances());
+      setItems(await listAdvances(undefined, role.id)); // 附 已占用/剩余
     } catch {
       /* 静默 */
     }
@@ -83,6 +84,9 @@ export function AdvancePage() {
           locale={{ emptyText: "暂无事前申请" }}
           renderItem={(a) => {
             const st = ADVANCE_STATUS[a.status] ?? { color: "default", label: a.status };
+            const reserved = a.reserved_amount ?? 0;
+            const remaining = a.remaining_amount ?? a.estimated_amount - reserved;
+            const over = remaining < 0;
             return (
               <List.Item>
                 <List.Item.Meta
@@ -90,9 +94,23 @@ export function AdvancePage() {
                     <Space>
                       <span>{a.app_id}</span>
                       <Tag color={st.color}>{st.label}</Tag>
+                      <Tag color={over ? "red" : "green"}>
+                        {over ? `超支 ${Math.abs(remaining).toFixed(2)}` : `剩余 ¥${remaining.toFixed(2)}`}
+                      </Tag>
                     </Space>
                   }
-                  description={`${a.start_date} ~ ${a.end_date} · 有效期至 ${a.valid_until} · ¥${a.estimated_amount.toFixed(2)} · ${a.purpose}`}
+                  description={
+                    <>
+                      <span>
+                        {a.start_date} ~ {a.end_date} · 有效期至 {a.valid_until} · 预估 ¥{a.estimated_amount.toFixed(2)} ·{" "}
+                        {a.purpose}
+                      </span>
+                      <br />
+                      <span style={{ color: "#888" }}>
+                        已报（approved 占用合计）¥{reserved.toFixed(2)} —— 报销提交页可选本申请挂靠报销
+                      </span>
+                    </>
+                  }
                 />
               </List.Item>
             );

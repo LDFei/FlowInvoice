@@ -122,9 +122,23 @@ export function RequestDetailPanel({ detail }: { detail: RequestDetail }) {
       {/* 事前申请 + 审批链 + 审批记录 */}
       <Descriptions column={1} size="small" bordered style={{ marginBottom: 12 }}>
         <Descriptions.Item label="事前申请">
-          {advance
-            ? `${advance.app_id}（${advance.start_date} ~ ${advance.end_date}，${advance.purpose}）`
-            : "无"}
+          {advance ? (
+            <>
+              {advance.app_id}（{advance.start_date} ~ {advance.end_date}，{advance.purpose}）
+              <br />
+              <span style={{ color: "#888" }}>
+                预估 ¥{(advance.estimated_amount ?? 0).toFixed(2)} · 已报 ¥{(advance.reserved_amount ?? 0).toFixed(2)}
+                {advance.reserved_amount != null && (
+                  <>
+                    {" "}
+                    · 剩 ¥{Math.max(advance.estimated_amount - advance.reserved_amount, 0).toFixed(2)}
+                  </>
+                )}
+              </span>
+            </>
+          ) : (
+            "无"
+          )}
         </Descriptions.Item>
         <Descriptions.Item label="审批链">
           {chain.map((n) => `${n.role}(${n.name})`).join(" → ") || "—"}

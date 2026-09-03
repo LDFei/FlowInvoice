@@ -30,11 +30,23 @@ def create_advance(request: Request, body: AdvanceCreate):
     response_model=list[AdvanceDetail],
     summary="事前申请列表",
     description="""
-事前申请单列表，支持按状态过滤（`active` / `used` / `expired`）。
+事前申请单列表，支持按状态（`active` / `expired`）与员工过滤；每条附**预算占用信息**（`reserved_amount` 已报合计、`remaining_amount` 剩余额度）。
 
-报销端"我申请的事前单"、审核端核对申请是否有效时使用。
+报销端"我申请的事前单"、报销时选关联申请、审核端核对申请有效性时使用。
 """,
 )
-def list_advances(request: Request, status: str | None = None):
-    """事前申请列表（可按状态过滤）"""
-    return request.app.state.container.storage.list_advances(status)
+def list_advances(request: Request, status: str | None = None, employee_id: str | None = None):
+    """事前申请列表（可按状态/员工过滤，附预算占用：#91 预算池前端展示）"""
+    container = request.app.state.container
+    items = container.storage.list_advances(status)
+    if employee_id:
+        items = [a for a in items if a["employee_id"] == employee_id]
+    # 作用：占用信息=预算池台账实时合计（reserve_advance 原子写入，读时不额外加锁）
+    return [
+        {
+            **a,
+            "reserved_amount": container.advances.reserved(a["app_id"]),
+            "remaining_amount": round(a["estimated_amount"] - container.advances.reserved(a["app_id"]), 2),
+        }
+        for a in items
+    ]

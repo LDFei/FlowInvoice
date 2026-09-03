@@ -46,6 +46,7 @@ class RequestDetail(BaseModel):
     status: str = Field(..., description="流程状态：in_review=审批中 / returned=退回 / approved=已批准 / paid=已打款 / voided=作废")
     current_step: str = Field("", description="当前挂起点：review=待审核人复核 / leader_decision=待领导决策 / done=结束")
     business_type: str = Field("", description="业务方向（travel=差旅）")
+    parent_request_id: Optional[str] = Field(None, description="退回重提留痕：本次报销由哪个原单退回/作废后重提（无则不填）")
     summary: str = Field("", description="Agent 生成的审核总结（含『政策依据』条款引用，供复核追溯）")
     invoice_data: Optional[dict] = Field(None, description="票面信息：发票号码 / 类型 / 开票日期 / 金额 / 项目 / 风险标记")
     verification: Optional[dict] = Field(None, description="验真结果：verified=真伪 / duplicate=是否重复报销 / note=说明")
@@ -62,6 +63,16 @@ class RequestDetail(BaseModel):
     emails: list = Field(default_factory=list, description="邮件留痕（发给领导的审批邮件）")
 
 
+class SubmissionStatus(BaseModel):
+    """异步任务状态（#52：异步模式提交后立即返回，worker 处理后更新；前端轮询用，docs/06 §2）"""
+    request_id: str = Field(..., description="报销单号（任务主键）")
+    status: str = Field("pending", description="任务状态：pending=排队中 / processing=处理中 / succeeded=已完成 / failed=失败")
+    attempts: int = Field(0, description="已重试次数（失败自动退避重试）")
+    error: Optional[dict] = Field(None, description="失败原因 {type, message}（重试耗尽后出现）")
+    created_at: str = Field("", description="创建时间")
+    updated_at: str = Field("", description="更新时间")
+
+
 class AdvanceDetail(BaseModel):
     """事前申请单详情（创建 / 列表返回结构）"""
     app_id: str = Field(..., description="事前申请单号")
@@ -72,5 +83,7 @@ class AdvanceDetail(BaseModel):
     valid_until: str = Field("", description="有效期截止日期（过期后不可再匹配报销）")
     estimated_amount: float = Field(0, description="预估金额")
     purpose: str = Field("", description="出差事由")
-    status: str = Field("", description="active=有效 / used=已核销 / expired=已过期")
+    status: str = Field("", description="active=有效 / expired=已过期（预算池模型，used 不再自动置，#91）")
     created_at: str = Field("", description="创建时间")
+    reserved_amount: Optional[float] = Field(0, description="已占用合计（approved 报销单按票面累计，列表接口附）")
+    remaining_amount: Optional[float] = Field(0, description="剩余额度 = 预估 - 已占用（可为负=超支）")

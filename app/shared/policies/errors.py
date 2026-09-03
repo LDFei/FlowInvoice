@@ -18,3 +18,19 @@ class OcrFailedError(FlowInvoiceError):
 
 class AdvanceMissingError(FlowInvoiceError):
     """缺少有效事前申请：未申请或已过期/已使用"""
+
+
+class AdvanceAmbiguousError(FlowInvoiceError):
+    """自动匹配歧义：多份有效事前申请的区间都覆盖报销日期，需报销人显式指定挂哪份（#97）
+
+    业务：不静默取最早那份（会把 A 行程的票错挂到 B 申请的预算池）；结构化退回引导指定。
+    """
+
+    def __init__(self, candidates: list[dict]):
+        # 作用：候选申请（app_id/区间/事由）带进异常，退回信息可直接列给报销人
+        self.candidates = candidates
+        lines = "；".join(
+            f"{c['app_id']}（{c.get('start_date')}~{c.get('end_date')}，{c.get('purpose', '')}）"
+            for c in candidates
+        )
+        super().__init__(f"检测到 {len(candidates)} 份有效申请区间均覆盖该开票日期：{lines}，请指定本次票据对应的申请")

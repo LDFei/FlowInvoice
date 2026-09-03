@@ -65,6 +65,19 @@ LLM_BASE_URL = os.environ.get("FLOWINVOICE_LLM_BASE_URL", "https://api.deepseek.
 # 业务：超过该比例 → 打风险标记，提示申报人填写有误
 AMOUNT_DIFF_THRESHOLD = 0.05
 
+# ===== 上传安全（app/core/uploader.py） =====
+# 作用：上传文件大小上限（分块写入时超出即中止并拒绝，防超大文件打满磁盘）
+# 业务：发票形态单文件一般 KB~几 MB，10MB 富余；生产可按需调（FLOWINVOICE_MAX_UPLOAD_BYTES）
+MAX_UPLOAD_BYTES = int(os.environ.get("FLOWINVOICE_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+
+# 作用：允许上传的扩展名白名单（发票形态：图片 / PDF / 数电票 XML / Demo 文本票面）
+# 业务：白名单外（exe/脚本/任意文件）直接拒绝——接收未知类型文件是上传入口最常见的安全面
+ALLOWED_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".pdf", ".xml", ".ofd", ".txt"}
+
+# 作用：上传临时文件保留天数（到期清理，源文件权威副本在对象存储，本地临时文件是处理缓存）
+# 业务：防 data/uploads 无限增长；启动时 sweep（FLOWINVOICE_UPLOAD_RETENTION_DAYS 可调）
+UPLOAD_RETENTION_DAYS = int(os.environ.get("FLOWINVOICE_UPLOAD_RETENTION_DAYS", "7"))
+
 # 作用：演示员工号（Demo 不接登录，固定申报人）
 # 业务：真实系统由登录态注入；此处简化便于跑通闭环
 DEMO_EMPLOYEE_ID = "1001"
@@ -77,6 +90,17 @@ MINIO_ACCESS_KEY = os.environ.get("FLOWINVOICE_MINIO_ACCESS_KEY", "")
 MINIO_SECRET_KEY = os.environ.get("FLOWINVOICE_MINIO_SECRET_KEY", "")
 MINIO_BUCKET = os.environ.get("FLOWINVOICE_MINIO_BUCKET", "flowinvoice")
 MINIO_SECURE = os.environ.get("FLOWINVOICE_MINIO_SECURE", "0").lower() in ("1", "true", "yes")
+
+
+# ===== 异步任务（Celery + Redis，docs/06 异步任务层） =====
+# 作用：是否启用"提交→处理→挂起"进 Celery worker（FLOWINVOICE_ASYNC=1/true/yes 启用）
+# 业务：默认同步直跑（无 Redis 依赖，测试/离线行为不变）；生产设 1 后 API 提交即返回 pending，
+#       worker 执行图管线并写 submissions 状态（#52）
+ASYNC_ENABLED = os.environ.get("FLOWINVOICE_ASYNC", "").lower() in ("1", "true", "yes")
+
+# 作用：Celery broker 的 Redis 连接串（消息队列 / worker 领单）
+# 业务：仅异步模式有意义；未启用时无任何依赖
+REDIS_DSN = os.environ.get("FLOWINVOICE_REDIS_DSN", "redis://localhost:6379/0")
 
 
 # ===== 技术日志（app/core/logging.py，docs/07） =====

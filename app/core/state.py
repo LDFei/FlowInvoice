@@ -11,7 +11,7 @@ class ReimbursementState(TypedDict, total=False):
     invoice_input: dict             # 作用：标准输入 DTO（见 core/uploader）
 
     # —— 分类结果（路由依据）——
-    business_type: str              # 作用：业务方向；业务：travel/procurement...
+    business_type: str  # 分类结果(费用类型组,路由依据;当前 travel=差旅;非用户选择的"业务方向")              # 作用：业务方向；业务：travel/procurement...
 
     # —— 各节点产出（按节点写入）——
     invoice_data: dict              # OCR 结构化票面（识别节点写）

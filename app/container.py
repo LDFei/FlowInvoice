@@ -1,7 +1,10 @@
 # app/container.py —— 依赖容器（装配根，依赖倒置的汇聚点）
 # 业务：集中创建适配器/工具/业务模块/总控图；FastAPI 启动与测试共用同一装配，便于替换 Mock（docs/01 §6）
+import atexit
 import sys
 from pathlib import Path
+
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.adapters.llm import LLMClient
 from app.adapters.mock_oa import (
@@ -16,6 +19,7 @@ from app.adapters.storage import SqliteStorage
 from app.core import ids
 from app.core.config import (
     AMOUNT_DIFF_THRESHOLD,
+    ASYNC_ENABLED,
     CLAUSES_DIR,
     DB_PATH,
     LLM_API_KEY,
@@ -37,7 +41,7 @@ from app.tools.advance_tool import AdvanceTool
 from app.tools.email_tool import EmailTool
 from app.tools.llm_tool import LlmTool
 from app.tools.notify_tool import NotifyTool
-from app.tools.ocr_tool import OcrTool
+from app.tools.ocr_tool import OcrTool, PaddleOcrProvider
 from app.tools.policy_rag_tool import PolicyRagTool
 from app.tools.verify_tool import VerifyTool
 
@@ -57,6 +61,7 @@ class Container:
         advance_service,
         amount_threshold,
         object_dir=None,
+        checkpointer=None,
     ):
         # 适配器（外部系统边界）
         self.storage = storage
@@ -73,7 +78,9 @@ class Container:
         # 业务：LLM 无 key 时 llm_tool 为 None，全链路降级确定性路径（同 vector_store 范式）；
         #       识别工具按票据形态分派（XML 直解析 / 文本模板库 / LLM 兜底，docs/04 §3）
         self.llm_tool = LlmTool(LLMClient()) if LLM_API_KEY else None
-        self.ocr = OcrTool(llm_tool=self.llm_tool)
+        # 业务：PaddleOcrProvider 惰性加载——组件未装时图片/扫描识别明确降级报错，
+        #       XML/文本等核心格式不受影响（docs/04 §3.1 降级故事）
+        self.ocr = OcrTool(llm_tool=self.llm_tool, image_ocr=PaddleOcrProvider())
         self.verify_tool = VerifyTool(verify_provider)
         self.advance_tool = AdvanceTool(advance_service)
         self.notify_tool = NotifyTool(notify_provider)
@@ -95,6 +102,10 @@ class Container:
 
         # 业务模块（注册表装配：新增业务只改 registry.py）
         self.businesses = {name: builder(self) for name, builder in MODULE_BUILDERS.items()}
+
+        # HITL checkpointer：同步 MemorySaver（默认）/ 异步持久化（PG 或 SQLite，见 build_checkpointer）
+        # 作用：编译图时注入，interrupt() 挂起点的 checkpoint 写入持久化库 → decide 恢复跨进程可用
+        self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
 
         # 总控图（依赖上面全部，构建一次复用）
         self.graph = build_router_graph(self)
@@ -136,4 +147,52 @@ def build_container(db_path=None) -> Container:
         advance_service=AdvanceService(storage, policies),
         amount_threshold=AMOUNT_DIFF_THRESHOLD,
         object_dir=object_dir,
+        checkpointer=build_checkpointer(storage, db_path),
     )
+
+
+def build_checkpointer(storage, db_path=None):
+    """HITL checkpointer 三态选择（#52 D1）——同步/异步共用同一装配入口
+
+    | 模式       | 条件                    | checkpointer                      |
+    |-----------|-------------------------|-----------------------------------|
+    | 同步（默认）| FLOWINVOICE_ASYNC 未开   | MemorySaver（进程内，历史行为不变）|
+    | 异步 + PG  | ASYNC=1 且 PgStorage     | PostgresSaver（跨进程共享）       |
+    | 异步 + 本地| ASYNC=1 且 SqliteStorage | SqliteSaver（db 同目录替身）      |
+
+    作用：异步模式下 API 与 worker 各自 build_container()，checkpointer 指向同一持久化库
+          → worker 把挂起 checkpoint 写入库，API 进程 decide 经 Command(resume=...) 跨进程恢复。
+    注意：不能用 from_conn_string()（内部 with closing()，块退出即关连接）——长驻进程必须
+          自持连接/连接池再传构造函数，saver 与容器同生命周期（docs/11 F4 实测结论）。
+    """
+    if not ASYNC_ENABLED:
+        return MemorySaver()
+    if isinstance(storage, PgStorage):
+        # 生产：独立 psycopg_pool 连接池（多线程安全，与 PgStorage 各持各池互不干扰）。
+        # PostgresSaver 不自管事务（get_connection 借池连接归还即 rollback）→ 连接必须 autocommit，
+        # 且 setup() 里 CREATE INDEX CONCURRENTLY 不能在事务内跑；dict_row/prepare_threshold 与
+        # 官方 from_conn_string 一致（docs/11 F5 实测结论）
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        pool = ConnectionPool(
+            STORAGE_DSN,
+            min_size=1,
+            max_size=5,
+            open=True,
+            kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        )
+        atexit.register(pool.close)  # 进程退出回收连接
+        cp = PostgresSaver(pool)
+    else:
+        # 本地异步替身：checkpoint 文件与业务库同目录（测试传 tmp db_path → 隔离到 tmp）
+        import sqlite3
+
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        ckpt_path = Path(db_path).parent / "checkpoints.sqlite" if db_path else DB_PATH.parent / "checkpoints.sqlite"
+        conn = sqlite3.connect(str(ckpt_path), check_same_thread=False)
+        cp = SqliteSaver(conn)
+    cp.setup()  # 建 checkpoints 表（幂等）
+    return cp

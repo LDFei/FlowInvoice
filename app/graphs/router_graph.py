@@ -3,7 +3,6 @@
 #       退回/作废双闭环，结构化原因回传（docs/01 §4.1）
 from datetime import datetime
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
@@ -226,8 +225,9 @@ def build_router_graph(container):
     builder.add_edge("void_node", END)
     builder.add_edge("return_node", END)
 
-    # 作用：必须启用 checkpointer，interrupt() 才能跨调用暂停/恢复
-    graph = builder.compile(checkpointer=MemorySaver())
+    # 作用：必须启用 checkpointer，interrupt() 才能跨调用暂停/恢复；
+    #       checkpointer 由容器注入（#52：同步 MemorySaver / 异步持久化 PG|SQLite）
+    graph = builder.compile(checkpointer=container.checkpointer)
     # 作用：图结构调试信息只在 DEBUG 级别输出（FLOWINVOICE_LOG_LEVEL=DEBUG 时可见，避免每次构建刷屏）
     log_debug(logger, "图结构（mermaid）", mermaid=graph.get_graph().draw_mermaid())
     log_debug(logger, "图节点 → 实现函数", mapping={n: builder.nodes[n].runnable.func.__name__ for n in builder.nodes})

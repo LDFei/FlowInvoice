@@ -3,6 +3,19 @@
 from abc import ABC, abstractmethod
 
 
+def is_todo_for(state: dict, actor: str) -> bool:
+    """待办判定（#70 数据隔离）：单据当前步骤的审批人 == actor，才算该角色的待办"""
+    # 业务：review 步 = 审批链链首（直属上级）；leader_decision 步 = 链尾（总经理/最终决策人）；
+    #       审批人之外的角色（如报销人本人、出纳）看不到这单的"待办"
+    chain = state.get("approval_chain") or []
+    step = state.get("current_step")
+    if step == "review" and chain and chain[0].get("id") == actor:
+        return True
+    if step == "leader_decision" and chain and chain[-1].get("id") == actor:
+        return True
+    return False
+
+
 class UserProvider(ABC):
     """用户 / 组织架构：员工信息、直属上级、各审批角色"""
 
@@ -56,13 +69,19 @@ class StorageProvider(ABC):
         """按单号取请求状态（dict）"""
 
     @abstractmethod
-    def list_requests(self, status: str | None = None) -> list[dict]:
-        """列出请求摘要（可按状态过滤，供列表/驾驶舱使用）"""
+    def list_requests(
+        self,
+        status: str | None = None,
+        *,
+        employee_id: str | None = None,
+        approver_id: str | None = None,
+    ) -> list[dict]:
+        """列出请求摘要（可按状态/申报人/待办审批人过滤；#70 数据隔离：我的单据 / 我的待办）"""
 
     # ---- 事前申请 ----
     @abstractmethod
     def create_advance(self, advance: dict) -> None:
-        """新增事前申请单（upsert，便于状态流转 used/expired）"""
+        """新增事前申请单（upsert；#91 预算池模型：状态只 active/expired，核销走 advance_reservations 台账）"""
 
     @abstractmethod
     def get_advance(self, app_id: str) -> dict | None:
@@ -73,8 +92,20 @@ class StorageProvider(ABC):
         """按 员工+方向+日期 匹配有效事前申请"""
 
     @abstractmethod
+    def find_active_advances(self, employee_id: str, direction: str, on_date: str) -> list[dict]:
+        """列出区间覆盖该日期的全部有效事前申请（按创建先后；自动匹配歧义判定用，#97）"""
+
+    @abstractmethod
     def list_advances(self, status: str | None = None) -> list[dict]:
         """列出事前申请（可按状态过滤）"""
+
+    @abstractmethod
+    def reserve_advance(self, app_id: str, amount: float, request_id: str) -> float:
+        """预算占用记账（原子幂等，docs/06 预算台账）：请求单号一次占用一条，重复调用不重复累计，返回累计占用额"""
+
+    @abstractmethod
+    def sum_advance_reservations(self, app_id: str) -> float:
+        """某事前申请的累计占用额（已 approved 报销单的占用合计）"""
 
     # ---- 通知 / 邮件留痕 ----
     @abstractmethod
@@ -122,6 +153,12 @@ class StorageProvider(ABC):
     def reset_stuck_submissions(self) -> int:
         """启动恢复：processing → pending（上次进程崩溃），返回重置数"""
 
+    @abstractmethod
+    def claim_submission(self, request_id: str) -> bool:
+        """worker 原子领取：pending → processing（DB 级条件更新，防重复投递双跑）
+
+        返回 True=本 worker 领取成功；False=已被领取/已终态（重复投递幂等丢弃）"""
+
     # ================= 发票池（真查重，docs/06 §3.1） =================
 
     @abstractmethod
@@ -135,6 +172,10 @@ class StorageProvider(ABC):
     @abstractmethod
     def find_invoice(self, invoice_no: str) -> dict | None:
         """按票号查占用中的发票（查重命中返回占用行）"""
+
+    @abstractmethod
+    def find_invoice_items(self, invoice_no: str) -> list:
+        """按票号查明细行（invoice_items 子表，一对多；为三单匹配/抵扣台账留位，docs/04 §3.1）"""
 
     # ================= 审批记录（审计拆表，docs/06 §2） =================
 

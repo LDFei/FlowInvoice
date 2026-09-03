@@ -1,5 +1,6 @@
 # app/tools/advance_tool.py —— 事前申请匹配工具
-# 业务：差旅强制事前申请；无有效申请 → 结构化退回，指导报销人先申请
+# 业务：报销模式「关联事前申请」时匹配；无有效申请 → AdvanceMissingError（由 match_advance 节点
+#       结构化退回，指引报销人切换「直接报销」或先申请）。「直接报销」模式不调用本工具。
 from app.shared.advance.service import AdvanceService
 from app.shared.policies.errors import AdvanceMissingError
 

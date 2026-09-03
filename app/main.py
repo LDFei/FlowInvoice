@@ -16,13 +16,18 @@ logger = get_logger("app.main")
 from app.api.advance import router as advance_router
 from app.api.reimburse import router as reimburse_router
 from app.container import Container, build_container
-from app.core.config import RAG_VECTOR_DSN
+from app.core.config import ASYNC_ENABLED, RAG_VECTOR_DSN
 
 
 def seed_demo_data(container: Container) -> None:
     """种演示数据：内置一份有效的事前申请，保证差旅闭环开箱即走"""
     # 业务：Demo 员工 1001 差旅，申请区间覆盖今天 → 提交报销即可匹配成功
     today = date.today()
+    # 幂等守卫：已存在覆盖今天的 active 申请则跳过——异步模式每次重启都会跑 lifespan，
+    #       若无条件重插会让重叠申请逐次累积（历史上已累积 ~30 条），自动匹配失去唯一性
+    if container.storage.find_active_advances("1001", "travel", today.isoformat()):
+        log_info(logger, "演示事前申请已存在，跳过种入")
+        return
     container.advances.create(
         employee_id="1001",
         direction="travel",
@@ -44,6 +49,14 @@ async def lifespan(app: FastAPI):
         log_info(logger, "RAG 混合检索已启用：BM25 + bge-m3 向量", vector_store=dsn_display)
     else:
         log_info(logger, "RAG 纯 BM25 模式（未配置 FLOWINVOICE_PG_DSN，向量检索关闭）")
+    if ASYNC_ENABLED:
+        # 作用：异步模式启动时把上次崩溃遗留的 processing 任务复位为 pending（worker 重跑），
+        #      避免粘滞任务永久卡死（崩溃窗口自愈；周期回收留给 #62 beat）
+        reset = container.storage.reset_stuck_submissions()
+        log_info(logger, "异步模式：恢复上次崩溃遗留的粘滞任务", reset_count=reset)
+    # 作用：启动即 sweep 过期上传临时文件（#68，防 data/uploads 无限增长；源文件权威副本在对象存储）
+    removed = container.uploader.cleanup_stale()
+    log_info(logger, "上传临时文件清理完成", removed=removed)
     log_info(logger, "FlowInvoice 已启动：依赖容器就绪，演示数据已种入")
     yield
 

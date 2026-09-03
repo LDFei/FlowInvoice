@@ -8,13 +8,15 @@ from app.core.logging import get_logger, log_info
 logger = get_logger("mock_oa")
 
 # 业务：演示组织架构 —— 员工目录（真实系统从 OA 拉取）
-#       结构：工号 → {姓名/部门/邮箱/直属上级}
+#       结构：工号 → {姓名/部门/邮箱/直属上级/职级}
+#       grade 取值与 policy/travel.yaml `grade_max_rail_seat` 键对应（#85 席别按职级合规）：
+#       普通员工/经理/总监/高管，对齐差旅费管理规定条款 3.1 的三档（经理未单列，见 YAML 注释）
 DIRECTORY = {
-    "1001": {"id": "1001", "name": "张三", "dept": "销售部", "email": "zhangsan@demo.com", "manager": "2001"},
-    "2001": {"id": "2001", "name": "李四", "dept": "销售部", "email": "lisi@demo.com"},   # 直属上级（销售部经理）
-    "2002": {"id": "2002", "name": "王五", "dept": "销售部", "email": "wangwu@demo.com"},  # 部门负责人
-    "3001": {"id": "3001", "name": "赵六", "dept": "财务部", "email": "zhaoliu@demo.com"},  # 财务（出纳）
-    "4001": {"id": "4001", "name": "孙七", "dept": "总经办", "email": "sunqi@demo.com"},    # 总经理
+    "1001": {"id": "1001", "name": "张三", "dept": "销售部", "email": "zhangsan@demo.com", "manager": "2001", "grade": "普通员工"},
+    "2001": {"id": "2001", "name": "李四", "dept": "销售部", "email": "lisi@demo.com", "grade": "经理"},   # 直属上级（销售部经理）
+    "2002": {"id": "2002", "name": "王五", "dept": "销售部", "email": "wangwu@demo.com", "grade": "总监"},  # 部门负责人
+    "3001": {"id": "3001", "name": "赵六", "dept": "财务部", "email": "zhaoliu@demo.com", "grade": "普通员工"},  # 财务（出纳）
+    "4001": {"id": "4001", "name": "孙七", "dept": "总经办", "email": "sunqi@demo.com", "grade": "高管"},    # 总经理
 }
 
 # 业务：审批角色 → 人员（与 policy/travel.yaml 审批链 role 名对应）
