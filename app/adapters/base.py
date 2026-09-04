@@ -78,6 +78,16 @@ class StorageProvider(ABC):
     ) -> list[dict]:
         """列出请求摘要（可按状态/申报人/待办审批人过滤；#70 数据隔离：我的单据 / 我的待办）"""
 
+    # ---- 组织架构（#27 去硬编码：员工/审批角色入库） ----
+    @abstractmethod
+    def seed_org(self, payload: dict) -> None:
+        """幂等写组织架构（全量对齐 YAML 源；行少，先清后插重建保证一致）"""
+        # payload 形态：{"employees": {id: {name/dept/email/manager/grade}}, "roles": {role: employee_id}}
+
+    @abstractmethod
+    def load_org(self) -> dict:
+        """读回组织架构（同 seed_org payload 形态），供 UserProvider 启动加载"""
+
     # ---- 事前申请 ----
     @abstractmethod
     def create_advance(self, advance: dict) -> None:
@@ -86,10 +96,6 @@ class StorageProvider(ABC):
     @abstractmethod
     def get_advance(self, app_id: str) -> dict | None:
         """按单号取事前申请"""
-
-    @abstractmethod
-    def find_active_advance(self, employee_id: str, direction: str, on_date: str) -> dict | None:
-        """按 员工+方向+日期 匹配有效事前申请"""
 
     @abstractmethod
     def find_active_advances(self, employee_id: str, direction: str, on_date: str) -> list[dict]:
@@ -152,6 +158,11 @@ class StorageProvider(ABC):
     @abstractmethod
     def reset_stuck_submissions(self) -> int:
         """启动恢复：processing → pending（上次进程崩溃），返回重置数"""
+
+    @abstractmethod
+    def requeue_submission(self, request_id: str) -> None:
+        """人工重试 / 周期回收复位：failed|processing → pending（清失败原因、重试计数归零），
+        供 retry 接口重新投递与 reclaim 任务自愈——worker 靠 status='pending' 才能重新领取"""
 
     @abstractmethod
     def claim_submission(self, request_id: str) -> bool:

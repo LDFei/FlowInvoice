@@ -27,3 +27,19 @@ class AdvanceTool:
             on_date=on_date,
             app_id=app_id,
         )
+
+    def match_dates(
+        self,
+        *,
+        employee_id: str,
+        direction: str,
+        dates: list[str],
+        app_id: str = "",
+    ) -> dict:
+        """#A 多票批请求级匹配：一份申请须覆盖整批被接受票的全部开票日期（单票 dates=[d] 语义等同 match）"""
+        return self._service.match_dates(
+            employee_id=employee_id,
+            direction=direction,
+            dates=dates,
+            app_id=app_id,
+        )

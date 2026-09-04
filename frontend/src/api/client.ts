@@ -56,6 +56,20 @@ export function getSubmission(requestId: string): Promise<SubmissionStatus> {
   return request<SubmissionStatus>(`/api/submissions/${requestId}`);
 }
 
+/** 重试失败的异步任务（failed → pending 重新投递；返回新状态，前端继续轮询） */
+export function retrySubmission(requestId: string): Promise<SubmissionStatus> {
+  return request<SubmissionStatus>(`/api/submissions/${requestId}/retry`, { method: "POST" });
+}
+
+/** 异步提交任务列表（报销端"处理失败的任务"用；employeeId 过滤本人、status 可选） */
+export function listSubmissions(params: { employeeId?: string; status?: string } = {}): Promise<SubmissionStatus[]> {
+  const qs = new URLSearchParams();
+  if (params.employeeId) qs.set("employee_id", params.employeeId);
+  if (params.status) qs.set("status", params.status);
+  const s = qs.toString();
+  return request<SubmissionStatus[]>(`/api/submissions${s ? `?${s}` : ""}`);
+}
+
 /** 审批决策 */
 export function decide(
   requestId: string,
@@ -73,14 +87,26 @@ export function pay(
 }
 
 /** 查询报销单详情 */
+/** #93 发票原件取用：拼下载/预览 URL（同源相对路径 → Vite 代理到后端；对象存储权威副本） */
+export function originalUrl(requestId: string, objectKey: string): string {
+  return `/api/requests/${encodeURIComponent(requestId)}/originals/${encodeURIComponent(objectKey)}`;
+}
+
 export function getRequest(requestId: string): Promise<RequestDetail> {
   return request<RequestDetail>(`/api/requests/${requestId}`);
 }
 
-/** 报销单列表（可按状态过滤） */
-export function listRequests(status?: string): Promise<RequestSummary[]> {
-  const q = status ? `?status=${status}` : "";
-  return request<RequestSummary[]>(`/api/requests${q}`);
+/** 报销单列表（可按状态/申报人/待办审批人过滤；#70 数据隔离——报销端看我的、审批端看我的待办） */
+export function listRequests(
+  status?: string,
+  filters?: { employee_id?: string; approver_id?: string },
+): Promise<RequestSummary[]> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (filters?.employee_id) params.set("employee_id", filters.employee_id);
+  if (filters?.approver_id) params.set("approver_id", filters.approver_id);
+  const qs = params.toString();
+  return request<RequestSummary[]>(`/api/requests${qs ? `?${qs}` : ""}`);
 }
 
 /** 创建事前申请 */

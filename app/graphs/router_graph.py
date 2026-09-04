@@ -48,9 +48,13 @@ def build_router_graph(container):
         return module.build_graph().invoke(state)
 
     def summarize(state: dict) -> dict:
-        """总结节点：生成 Agent 审核总结（供审核人员复核）"""
+        """总结节点：生成 Agent 审核总结（供审核人员复核）
+
+        #32 函数调用实战：单票且 LLM 可用时模块走 agentic（LLM 绑定只读工具自主检索制度/组织，
+        轨迹回填 research_notes）；其余情形模块回落既有确定性/单次 LLM 总结，行为不变。
+        """
         module = businesses[state["business_type"]]
-        return {"summary": module.build_summary(state)}
+        return module.build_summary_agentic(state)
 
     def notify_reviewer(state: dict) -> dict:
         """通知审核人员：发送 Agent 总结，进入人工复核"""

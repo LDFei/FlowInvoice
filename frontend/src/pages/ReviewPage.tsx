@@ -18,14 +18,12 @@ export function ReviewPage() {
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState(false);
 
-  // 业务：按角色过滤我能操作的挂起点（review=审核人 / leader_decision=领导）
-  const isMine = (r: RequestSummary) =>
-    role.canReview ? r.current_step === "review" : role.canLead ? r.current_step === "leader_decision" : false;
-
+  // 业务：#70 数据隔离——服务端按"当前步骤待我审批"过滤（review 步=审批链首、leader_decision 步=链尾），
+  //       不拉全量再客户端过滤（数据量上来后列表接口/网络是浪费，且口径必须与后端 is_todo_for 一致）
   const load = async () => {
     try {
-      const list = await listRequests();
-      setItems(list.filter(isMine));
+      const list = await listRequests(undefined, { approver_id: role.id });
+      setItems(list);
     } catch {
       /* 轮询失败静默，下个周期重试 */
     }

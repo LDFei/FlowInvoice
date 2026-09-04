@@ -92,3 +92,45 @@ class LLMClient:
         if not json_mode:
             return {"text": content}
         return _extract_json(content)
+
+    def complete_message(
+        self,
+        system: str,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+    ) -> dict:
+        """单次 Chat Completions 返回原生 assistant 消息（#32 函数调用循环用）
+
+        业务：工具调用的对话需要保留 assistant 的 tool_calls 原文与后续 tool 角色回填，
+              json_mode 与 response_format 不能和 tools 同时用（接口冲突）→ 不强制 JSON。
+        返回：assistant 消息 dict（`content` 可 None——模型要求调用工具时通常无正文；
+              `tool_calls` 存在则含 OpenAI 规范 {id, type, function{name, arguments}}）。
+        失败：一律抛 LlmUnavailableError（不抛原始异常，调用方只需处理这一种）
+        """
+        if not self._api_key:
+            raise LlmUnavailableError("未配置 FLOWINVOICE_LLM_API_KEY")
+
+        payload: dict = {
+            "model": self._model,
+            "messages": [{"role": "system", "content": system}, *messages],
+            "temperature": 0,
+        }
+        if tools:
+            payload["tools"] = tools  # OpenAI 函数定义；缺省 tool_choice=auto
+
+        try:
+            resp = self._client.post(
+                f"{self._base_url}/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            raise LlmUnavailableError(f"LLM 请求失败: {exc}") from exc
+
+        if resp.status_code != 200:
+            raise LlmUnavailableError(f"LLM 接口返回 {resp.status_code}: {resp.text[:200]}")
+
+        try:
+            return resp.json()["choices"][0]["message"]
+        except (KeyError, IndexError, json.JSONDecodeError) as exc:
+            raise LlmUnavailableError(f"LLM 返回结构异常: {exc}") from exc

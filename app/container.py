@@ -19,7 +19,6 @@ from app.adapters.storage import SqliteStorage
 from app.core import ids
 from app.core.config import (
     AMOUNT_DIFF_THRESHOLD,
-    ASYNC_ENABLED,
     CLAUSES_DIR,
     DB_PATH,
     LLM_API_KEY,
@@ -103,8 +102,10 @@ class Container:
         # 业务模块（注册表装配：新增业务只改 registry.py）
         self.businesses = {name: builder(self) for name, builder in MODULE_BUILDERS.items()}
 
-        # HITL checkpointer：同步 MemorySaver（默认）/ 异步持久化（PG 或 SQLite，见 build_checkpointer）
-        # 作用：编译图时注入，interrupt() 挂起点的 checkpoint 写入持久化库 → decide 恢复跨进程可用
+        # HITL checkpointer：统一持久化（#28 同步也落盘；PG→PostgresSaver / SQLite→SqliteSaver，
+        # 见 build_checkpointer）——compile 时注入，interrupt() 挂起点的 checkpoint 写入持久化库，
+        # 服务重启后 decide 经 Command(resume=...) 原样恢复（跨进程/跨重启行为一致）。
+        # 兜底：直接 new Container（测试直构，不经 build_container）才落到 MemorySaver
         self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
 
         # 总控图（依赖上面全部，构建一次复用）
@@ -139,7 +140,7 @@ def build_container(db_path=None) -> Container:
     policies = PolicyLoader(POLICY_DIR)
     return Container(
         storage=storage,
-        users=MockUserProvider(),
+        users=MockUserProvider(storage),
         verify_provider=MockVerifyProvider(),
         notify_provider=MockNotifyProvider(storage),
         email_provider=MockEmailProvider(storage),
@@ -152,21 +153,21 @@ def build_container(db_path=None) -> Container:
 
 
 def build_checkpointer(storage, db_path=None):
-    """HITL checkpointer 三态选择（#52 D1）——同步/异步共用同一装配入口
+    """HITL checkpointer 持久化选择（#28 同步也持久化；#52 D1 装配入口）——同步/异步统一
 
-    | 模式       | 条件                    | checkpointer                      |
-    |-----------|-------------------------|-----------------------------------|
-    | 同步（默认）| FLOWINVOICE_ASYNC 未开   | MemorySaver（进程内，历史行为不变）|
-    | 异步 + PG  | ASYNC=1 且 PgStorage     | PostgresSaver（跨进程共享）       |
-    | 异步 + 本地| ASYNC=1 且 SqliteStorage | SqliteSaver（db 同目录替身）      |
+    | 存储        | checkpointer                      | 用途                              |
+    |------------|-----------------------------------|-----------------------------------|
+    | PgStorage   | PostgresSaver（独立连接池）        | 生产：API/worker 跨进程共享        |
+    | SqliteStorage| SqliteSaver（db 同目录替身）      | 本地/测试：单机持久化             |
 
-    作用：异步模式下 API 与 worker 各自 build_container()，checkpointer 指向同一持久化库
-          → worker 把挂起 checkpoint 写入库，API 进程 decide 经 Command(resume=...) 跨进程恢复。
+    作用（#28）：同步模式（FLOWINVOICE_ASYNC 未开）此前用 MemorySaver——进程重启即丢 HITL 挂起
+          checkpoint（短记忆不落盘）。现同步/异步统一走持久化 saver：挂起后服务重启，decide 经
+          Command(resume=...) 可从 checkpoint 原样恢复，行为与异步模式一致（docs/15 §2 短记忆持久化）。
+          启动对账（main.py materialize_orphan_checkpoints）同步同样执行——"写 checkpoint → 落行"
+          间崩溃的孤儿 checkpoint 会物化回 requests 行，不因持久化而在同步模式产生幽灵单据。
     注意：不能用 from_conn_string()（内部 with closing()，块退出即关连接）——长驻进程必须
           自持连接/连接池再传构造函数，saver 与容器同生命周期（docs/11 F4 实测结论）。
     """
-    if not ASYNC_ENABLED:
-        return MemorySaver()
     if isinstance(storage, PgStorage):
         # 生产：独立 psycopg_pool 连接池（多线程安全，与 PgStorage 各持各池互不干扰）。
         # PostgresSaver 不自管事务（get_connection 借池连接归还即 rollback）→ 连接必须 autocommit，
@@ -186,7 +187,7 @@ def build_checkpointer(storage, db_path=None):
         atexit.register(pool.close)  # 进程退出回收连接
         cp = PostgresSaver(pool)
     else:
-        # 本地异步替身：checkpoint 文件与业务库同目录（测试传 tmp db_path → 隔离到 tmp）
+        # 本地持久化替身：checkpoint 文件与业务库同目录（测试传 tmp db_path → 隔离到 tmp）
         import sqlite3
 
         from langgraph.checkpoint.sqlite import SqliteSaver

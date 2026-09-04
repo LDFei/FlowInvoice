@@ -1,0 +1,40 @@
+# app/adapters/org_data.yaml —— 演示组织架构数据源（#27 去硬编码）
+# 业务：原 mock_oa.py 内 Python 常量直编 → 独立 YAML 文件，容器启动时 seed 进
+#       employees / approver_roles 表（SqliteStorage/PgStorage 通用）。真实系统改从 OA 拉取。
+# manager 仅申报员工（1001）有值 = 直属上级；其余为审批/管理角色，无上级（get_manager 不被调用）。
+# grade 取值与 policy/travel.yaml `grade_max_rail_seat` 键对应（#85 席别按职级合规）：
+#   普通员工/经理/总监/高管，对齐差旅费管理规定条款 3.1 的三档（经理未单列，见 YAML 注释）
+employees:
+  - id: "1001"
+    name: "张三"
+    dept: "销售部"
+    email: "zhangsan@demo.com"
+    manager: "2001"
+    grade: "普通员工"
+  - id: "2001"
+    name: "李四"
+    dept: "销售部"
+    email: "lisi@demo.com"
+    grade: "经理"
+  - id: "2002"
+    name: "王五"
+    dept: "销售部"
+    email: "wangwu@demo.com"
+    grade: "总监"
+  - id: "3001"
+    name: "赵六"
+    dept: "财务部"
+    email: "zhaoliu@demo.com"
+    grade: "普通员工"
+  - id: "4001"
+    name: "孙七"
+    dept: "总经办"
+    email: "sunqi@demo.com"
+    grade: "高管"
+
+# 审批角色 → 人员（与 policy/travel.yaml 审批链 role 名对应）
+approver_roles:
+  直属上级: "2001"
+  部门负责人: "2002"
+  财务: "3001"
+  总经理: "4001"

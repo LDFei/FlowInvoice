@@ -69,6 +69,36 @@ export interface InvoiceData {
   risk_flags?: string[];
 }
 
+/** #A 批内被接受票（同一报销单内逐票视图：票面 + 验真 + 逐票软闸门结果） */
+export interface BatchTicket {
+  /** 该票上传 meta（file_name 原始文件名；object_key=对象存储源文件 key，#93 原件取用凭据） */
+  invoice_input: {
+    employee_id?: string;
+    file_name?: string;
+    declared_amount?: number;
+    /** #93 对象存储取用接线：原件下载/预览端点凭据（服务端已摘除 file_path，只暴露对象 key） */
+    object_key?: string;
+    [k: string]: unknown;
+  };
+  invoice_data: InvoiceData;
+  verification: { verified: boolean; duplicate: boolean; note: string };
+  /** 逐票软闸门（如 酒店单晚限额/席别越级）——请求级结论看顶层 compliance_checks */
+  compliance_checks: ComplianceCheck[];
+}
+
+/** #A 批内被拒票（不进审批、不入池；category/message/suggestion 即重传依据） */
+export interface RejectedTicket {
+  invoice_no: string;
+  invoice_type: string;
+  amount: number | null;
+  file_name: string;
+  category: string;
+  message: string;
+  suggestion: string;
+  /** #93 被拒票也保留上传 meta（object_key 可取原件核对，重传依据不只文字） */
+  invoice_input?: { file_name?: string; object_key?: string; [k: string]: unknown };
+}
+
 /** 审批记录 */
 export interface ApprovalRecord {
   role: string;
@@ -102,6 +132,12 @@ export interface RequestDetail {
   business_type: string;
   summary: string;
   invoice_data: InvoiceData | null;
+  /** #A 多票批：被接受并入审的票列表（单票请求=长度 1；老数据（无 tickets）为 null → 回退单票视图） */
+  tickets?: BatchTicket[] | null;
+  /** #A 多票批：被拒票列表（不进审批，供报销人按票重传/核对原因） */
+  rejected?: RejectedTicket[] | null;
+  /** #A 多票批：Σ 被接受票面金额（审批链档位/预算占用/通知金额口径；单票=票面金额） */
+  total_amount?: number | null;
   verification: { verified: boolean; duplicate: boolean; note: string } | null;
   advance_application: AdvanceApplication | null;
   compliance_checks: ComplianceCheck[] | null;

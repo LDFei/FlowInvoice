@@ -2,7 +2,7 @@
 # 业务：#52 把"提交→处理→挂起"从 HTTP 请求线程搬进 worker；API 只负责入队，worker 消费（docs/06 §2）
 # 注意：worker 是独立进程，无法复用 API 进程的 Container —— 各自 build_container()，
 #       checkpointer 指向同一持久化库（PostgresSaver/SqliteSaver）→ decide 跨进程恢复 HITL
-from app.api.service import run_submit_pipeline
+from app.api.service import run_submit_pipeline, submit_outcome_materialized
 from app.celery_app import celery_app
 from app.container import build_container
 from app.core.logging import get_logger, log_error, log_info, log_warning, set_log_context
@@ -51,6 +51,14 @@ def process_submission(self, request_id: str):
         log_error(logger, "任务行不存在，终止", request_id=request_id)
         return
     log_info(logger, "任务领取成功，开始执行提交管线", request_id=request_id)
+    # #94 崩溃窗口语义：领到单≠该跑——run_submit_pipeline 只在图跑完（挂起/终态）后 upsert 行，
+    #       若行已存在且停在 HITL/终态，说明上一轮"图跑完→写行"已成功、只差 succeeded 未落（写前崩溃），
+    #       补终态即可，**绝不能重跑**（重跑=重发审核通知 + 发票重入池覆盖已审单据，docs/12 F-E）。
+    #       行不存在/停在在途 = 首轮真中途崩溃 → 落到下方 try 重跑。
+    if submit_outcome_materialized(container, request_id):
+        container.storage.update_submission(request_id, status=SubmissionStatus.SUCCEEDED)
+        log_info(logger, "提交结果已落地（succeeded 写前崩溃窗口），补终态不重跑", request_id=request_id)
+        return
     try:
         run_submit_pipeline(container, sub["snapshot"], request_id)
     except Exception as exc:

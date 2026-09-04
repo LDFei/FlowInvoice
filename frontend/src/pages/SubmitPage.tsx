@@ -1,5 +1,6 @@
 // 提交报销页(个人报销通道)—— 上传票据 + 填单(报销方式 + 可选关联事前申请)→ 提交 → 展示 Agent 审核结果
-// 业务:员工个人垫付费用统一走本通道,页面不选"业务方向"——票种由系统识别,归入当前已开通的费用类型组审核。
+// 业务:员工个人垫付费用统一走本通道,页面不选"业务方向"——本期仅差旅费用组,direction 由后端默认 travel
+//       (多费用类型组并存后,由系统按票据归类属后续扩展;现文案不承诺自动归类)。
 //       报销方式两种(默认关联事前申请):
 //         1) 关联出差申请(默认,差旅场景):出差前已提交出差/事前申请,报销挂到本次出差 → 占用其预算池;
 //            不指定申请时,后端仅【唯一命中】的区间才自动挂靠,多份重叠需显式指定(#97)。
@@ -22,7 +23,7 @@ import {
   message,
 } from "antd";
 import { useEffect, useState } from "react";
-import { getRequest, getSubmission, listAdvances, submitReimburse } from "../api/client";
+import { getRequest, getSubmission, listAdvances, retrySubmission, submitReimburse } from "../api/client";
 import type { AdvanceApplication, RequestDetail } from "../api/types";
 import { RequestDetailPanel } from "../components/RequestDetailPanel";
 import { StatusTag } from "../components/StatusTag";
@@ -36,10 +37,14 @@ function fmt(n: number | undefined): string {
 // 异步提交的分步进度展示（#53：提交即 202 受理，后台 worker 处理；动画按耗时推进，终态以轮询结果为准）
 const ASYNC_STAGES = ["提交受理", "识别票据", "核实票真伪", "合规检查", "生成审批链", "等待人工复核"];
 
+// #A 一单最多票数（与后端 MAX_BATCH_FILES=10 对齐，超限后端 400，前端先拦）
+const MAX_FILES = 10;
+
 export function SubmitPage() {
   const { role } = useRole();
   const [form] = Form.useForm();
-  const [file, setFile] = useState<File | null>(null);
+  // #A 多票批：一次上传 1..10 张（同一出差行程的多张票据并入一单审核；单张票=传统单票报销）
+  const [files, setFiles] = useState<File[]>([]);
   const [advances, setAdvances] = useState<AdvanceApplication[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<RequestDetail | null>(null);
@@ -47,6 +52,8 @@ export function SubmitPage() {
   // 异步提交：202 受理后的任务号 + 已耗秒数（进度动画 + 轮询；终态 = 轮询到 succeeded）
   const [asyncId, setAsyncId] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  // 处理失败的任务号（failed 终态）：记录以便展示"重试"按钮，点击后重新投递并恢复轮询
+  const [failedId, setFailedId] = useState<string | null>(null);
   // 报销方式：advance=关联出差申请（默认，差旅报销挂到已批事前申请）/ direct=直接报销（未做事前申请）
   const mode = Form.useWatch("mode", form) ?? "advance";
 
@@ -84,10 +91,12 @@ export function SubmitPage() {
           setResult(detail);
           setError("");
           setAsyncId(null);
+          setFailedId(null);
           message.success("Agent 已完成审核，单据进入审批");
         } else if (sub.status === "failed") {
-          setError(`后台处理失败：${sub.error?.message ?? "未知错误"}，可修正后重新提交`);
+          setError(`后台处理失败：${sub.error?.message ?? "未知错误"}，可点下方「重试」重新提交处理`);
           setAsyncId(null);
+          setFailedId(asyncId); // 记录失败单号 → 错误条上挂"重试"按钮
         } else if (sec > 240) {
           setError("处理耗时较长，仍在后台执行——可稍后到「我的单据」查看结果");
           setAsyncId(null);
@@ -108,23 +117,35 @@ export function SubmitPage() {
     mode?: string;
     app_id?: string;
   }) => {
-    if (!file) {
+    if (files.length === 0) {
       message.warning("请先上传发票文件");
+      return;
+    }
+    if (files.length > MAX_FILES) {
+      message.warning(`单次最多提交 ${MAX_FILES} 张发票，实际 ${files.length} 张`);
       return;
     }
     setSubmitting(true);
     setError("");
+    setFailedId(null);
     try {
       const chosenMode = values.mode ?? "advance";
       const fd = new FormData();
-      fd.append("file", file);
+      // #A 多票批：单票走 "file" 字段（申报金额逐票比对保留）；多票走 "files" 列表（后端按票面申报，
+      //       不逐票收集申报额），与后端路由 file XOR files 二选一契约一致
+      if (files.length === 1) {
+        fd.append("file", files[0]);
+      } else {
+        for (const f of files) fd.append("files", f);
+      }
       // 业务：方向是系统内部路由键（费用类型组），不由用户选择——后端默认 travel（差旅费用组）。
       //       mode 决定本次报销是否关联事前申请：advance（默认）→ 可显式带 app_id，空则由后端唯一命中自动挂靠；
       //       direct（直接报销）→ 不带 app_id，后端跳过事前匹配与预算占用。
       fd.append("mode", chosenMode);
       fd.append("purpose", values.purpose ?? "");
-      fd.append("declared_amount", String(values.declared_amount ?? 0));
       fd.append("employee_id", role.id);
+      // 单票才提交申报金额（与票面差异比对出风险标记）；多票按票面申报 → 不传（后端默认 0 = 按票面）
+      if (files.length === 1) fd.append("declared_amount", String(values.declared_amount ?? 0));
       if (chosenMode === "advance" && values.app_id) fd.append("app_id", values.app_id);
       const res = await submitReimburse(fd);
       if (!("accepted" in res)) {
@@ -137,6 +158,24 @@ export function SubmitPage() {
       setElapsed(0);
       setAsyncId(res.request_id);
       message.success("已受理，Agent 正在后台处理");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // 失败任务重试：failed → pending（后端重新投递），成功后恢复轮询等 succeeded
+  const handleRetry = async () => {
+    if (!failedId) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      await retrySubmission(failedId);
+      setFailedId(null);
+      setElapsed(0);
+      setAsyncId(failedId); // 回到进度动画 + 轮询；成功则出结果，再失败则回到 failedId 可再重试
+      message.success("已重新投递，Agent 正在后台处理");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -160,28 +199,55 @@ export function SubmitPage() {
           onFinish={handleSubmit}
           initialValues={{ declared_amount: 528.5, mode: "advance" }}
         >
-          <Form.Item label="发票文件" required>
+          <Form.Item label={`发票文件（${files.length}/${MAX_FILES} 张）`} required>
             <Upload.Dragger
               accept=".txt,.png,.jpg,.jpeg,.bmp,.webp,.pdf,.xml,.ofd"
-              maxCount={1}
+              multiple
+              maxCount={MAX_FILES}
               beforeUpload={() => false}
-              onChange={({ fileList }) => setFile(fileList[0]?.originFileObj ?? null)}
+              onChange={({ fileList }) => {
+                // #A 多票批：一次可拖多张；取原始文件（originFileObj: RcFile 是 File 的子类型），
+                //       超出上限截断并提示（后端同样限 10，先在前端拦截）
+                const picked: File[] = [];
+                for (const f of fileList) {
+                  if (f.originFileObj) picked.push(f.originFileObj);
+                  if (picked.length >= MAX_FILES) break;
+                }
+                if (fileList.length > MAX_FILES) {
+                  message.warning(`单次最多提交 ${MAX_FILES} 张发票，已取前 ${MAX_FILES} 张`);
+                }
+                setFiles(picked);
+              }}
             >
               <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-              <p className="ant-upload-text">点击或拖拽发票文件到此处</p>
-              <p className="ant-upload-hint">支持文本票面、数电票 XML/OFD、PDF 与图片/扫描件；票种由系统自动识别</p>
+              <p className="ant-upload-text">点击或拖拽发票文件到此处（可一次选多张）</p>
+              <p className="ant-upload-hint">
+                支持文本票面、数电票 XML/OFD、PDF 与图片/扫描件；票种由系统自动识别。
+                #A 多张票据将并入同一报销单批量审核（票面合计=报销总额，一次出差多张票无需分开报）
+              </p>
             </Upload.Dragger>
           </Form.Item>
           <Form.Item label="报销事由" name="purpose">
             <Input placeholder="如：上海客户拜访往返高铁" />
           </Form.Item>
-          <Form.Item
-            label="申报金额（元）"
-            name="declared_amount"
-            extra="Agent 会与票面金额比对，差异超阈值将标记风险"
-          >
-            <InputNumber min={0} precision={2} style={{ width: "100%" }} />
-          </Form.Item>
+          {/* 申报金额仅在单票时收集（与票面比对标风险）；多票按票面申报，不逐票填申报额 */}
+          {files.length > 1 ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="批量报销按票面金额申报"
+              description="本单 {files.length} 张票据作为同一报销单批量入审，票面合计即为报销总额，无需逐票填写申报金额；审批链档位与预算占用均按票面合计计算。"
+            />
+          ) : (
+            <Form.Item
+              label="申报金额（元）"
+              name="declared_amount"
+              extra="Agent 会与票面金额比对，差异超阈值将标记风险"
+            >
+              <InputNumber min={0} precision={2} style={{ width: "100%" }} />
+            </Form.Item>
+          )}
           {/* 报销方式：默认关联出差申请（差旅报销挂到已批事前申请、占预算）；直接报销=未做事前申请，凭票直报 */}
           <Form.Item label="报销方式" name="mode" style={{ marginBottom: mode === "advance" ? 8 : 16 }}>
             <Radio.Group>
@@ -236,7 +302,21 @@ export function SubmitPage() {
             {asyncId ? "后台处理中…" : "提交报销，交给 Agent 审核"}
           </Button>
         </Form>
-        {error && <Alert type="error" showIcon message={error} style={{ marginTop: 12 }} />}
+        {error && (
+          <Alert
+            type="error"
+            showIcon
+            message={error}
+            style={{ marginTop: 12 }}
+            action={
+              failedId ? (
+                <Button size="small" type="primary" danger onClick={handleRetry} loading={submitting}>
+                  重试
+                </Button>
+              ) : undefined
+            }
+          />
+        )}
       </Card>
 
       {/* 异步提交进度（#53）：202 受理后展示分步动画，轮询 succeeded 后切换到结果卡片 */}

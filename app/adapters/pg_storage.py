@@ -98,6 +98,20 @@ CREATE TABLE IF NOT EXISTS approval_records (
 );
 CREATE INDEX IF NOT EXISTS idx_approval_records_request ON approval_records (request_id);
 
+-- 组织架构（#27 去硬编码：员工/审批角色入库，源 org_data.yaml）
+CREATE TABLE IF NOT EXISTS employees (
+    id      TEXT PRIMARY KEY,
+    name    TEXT NOT NULL,
+    dept    TEXT,
+    email   TEXT,
+    manager TEXT,
+    grade   TEXT
+);
+CREATE TABLE IF NOT EXISTS approver_roles (
+    role        TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS advance_applications (
     app_id           TEXT PRIMARY KEY,
     employee_id      TEXT NOT NULL,
@@ -215,6 +229,35 @@ class PgStorage(StorageProvider):
         # 作用：state 允许含 Decimal（PG NUMERIC 读回类型），序列化兜底转字符串（docs/06 §3.4）
         return Jsonb(obj, dumps=_json_dumps)
 
+    # ================= 组织架构（#27） =================
+
+    def seed_org(self, payload: dict) -> None:
+        # 作用：全量对齐组织数据（先清后插，保证与 YAML 源一致）；行少，直接重建
+        with self._conn() as conn:
+            conn.execute("DELETE FROM employees")
+            for emp in payload["employees"].values():
+                conn.execute(
+                    """INSERT INTO employees (id, name, dept, email, manager, grade)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (emp["id"], emp["name"], emp.get("dept"), emp.get("email"), emp.get("manager"), emp.get("grade")),
+                )
+            conn.execute("DELETE FROM approver_roles")
+            for role, emp_id in payload["roles"].items():
+                conn.execute(
+                    "INSERT INTO approver_roles (role, employee_id) VALUES (%s, %s)", (role, emp_id)
+                )
+            conn.commit()
+
+    def load_org(self) -> dict:
+        # 作用：读回组织架构（供 UserProvider 启动加载）
+        with self._conn() as conn:
+            emp_rows = conn.execute("SELECT * FROM employees").fetchall()
+            role_rows = conn.execute("SELECT * FROM approver_roles").fetchall()
+        return {
+            "employees": {r["id"]: dict(r) for r in emp_rows},
+            "roles": {r["role"]: r["employee_id"] for r in role_rows},
+        }
+
     # ================= 报销请求 =================
 
     def upsert_request(self, request_id: str, state: dict, status: str, current_step: str) -> None:
@@ -263,7 +306,8 @@ class PgStorage(StorageProvider):
                 "status": row["status"],
                 "current_step": row["current_step"],
                 "business_type": state.get("business_type", ""),
-                "amount": invoice.get("amount"),
+                # #A 多票批：金额列 = Σ 被接受票面（total_amount）；旧单（无该键）回退单票 invoice_data.amount
+                "amount": state.get("total_amount") if state.get("total_amount") is not None else invoice.get("amount"),
                 "employee_id": state.get("invoice_input", {}).get("employee_id", ""),
                 "created_at": row["created_at"].isoformat(),
                 "updated_at": row["updated_at"].isoformat(),
@@ -303,10 +347,6 @@ class PgStorage(StorageProvider):
             d["estimated_amount"] = _to_float(d.get("estimated_amount"))
             d["created_at"] = d["created_at"].isoformat()
             return d
-
-    def find_active_advance(self, employee_id: str, direction: str, on_date: str) -> dict | None:
-        rows = self.find_active_advances(employee_id, direction, on_date)
-        return rows[0] if rows else None
 
     def find_active_advances(self, employee_id: str, direction: str, on_date: str) -> list[dict]:
         # 业务：列出区间覆盖该日期的全部有效申请（按创建先后）——自动匹配要判定"是否唯一命中"，歧义交还报销人（#97）
@@ -483,6 +523,17 @@ class PgStorage(StorageProvider):
             )
             conn.commit()
             return cur.rowcount
+
+    def requeue_submission(self, request_id: str) -> None:
+        # 作用：failed|processing → pending（错误清空、计数归零）；单行全量复位，供 retry/周期回收
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE submissions
+                   SET status = 'pending', error = NULL, attempts = 0, updated_at = %s
+                   WHERE request_id = %s""",
+                (_now(), request_id),
+            )
+            conn.commit()
 
     def claim_submission(self, request_id: str) -> bool:
         # 作用：WHERE status='pending' 原子领取；RETURNING 有行=领取成功（重复投递/并发 worker 幂等）

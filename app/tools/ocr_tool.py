@@ -724,7 +724,18 @@ class OcrTool:
         ]
 
     def extract(self, file_path: str) -> dict:
-        """识别票面 → 结构化数据；失败抛 OcrFailedError（由识别节点转为结构化退回）。
+        """识别票面 → 结构化数据；失败抛 OcrFailedError（由识别节点转为结构化退回）
+
+        从本地路径读取字节后委托 extract_bytes（#93：对象存储取用链路可直接喂 bytes）。
+        """
+        try:
+            raw = Path(file_path).read_bytes()
+        except Exception as exc:
+            raise OcrFailedError(f"文件读取失败: {exc}") from exc
+        return self.extract_bytes(raw)
+
+    def extract_bytes(self, raw: bytes) -> dict:
+        """从原始字节识别票面（#93 对象存储取用接线：本地临时 file_path 缺失时按 object_key 取 bytes 喂入）
 
         降级边界（A2，docs/04 §3 全链统一哲学——除 Xml 外各层内部都有自降级，唯独顶层分派以前没有）：
         形态命中后解析失败，只有一种情况允许继续尝试后续形态——
@@ -734,10 +745,6 @@ class OcrTool:
         保留具体报错（缺哪个字段一目了然，供人工修或扩展别名），**不降级**——否则真发票的
         报错会被 OCR 噪音淹没。PDF/OFD/文本/OCR 的 matches 是强嗅探，失败即终局报错。
         """
-        try:
-            raw = Path(file_path).read_bytes()
-        except Exception as exc:
-            raise OcrFailedError(f"文件读取失败: {exc}") from exc
         last_error: OcrFailedError | None = None
         for parser in self._parsers:
             if not parser.matches(raw):

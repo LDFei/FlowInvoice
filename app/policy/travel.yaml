@@ -8,6 +8,13 @@ hotel_daily_limit: 300          # 住宿每日上限（元）—— 对齐条款
 advance_required: true          # 差旅是否必须事前申请
 advance_valid_days: 30          # 出差申请有效期（天，申请结束日期后顺延）
 
+# —— 审批 SLA（#62：人工审批时限兜底，防挂起无限堆积）——
+# 业务：单据停在"待某角色人工审批"超过 approval_sla_hours 小时 → beat 周期催办该审批人（站内消息）；
+#       超过 approval_escalate_hours 小时仍无动作 → 升级给上级/财务监督处理（催办留痕在 messages）。
+#       制度调时限只改这里，不改代码；0 = 关闭该项（不启用 SLA 兜底）
+approval_sla_hours: 24          # 审批 SLA：待审超过 N 小时发催办
+approval_escalate_hours: 72     # 升级时限：催办后仍超 N 小时（距挂起）升级
+
 # —— 发票合规确定性闸门（#87：发票"本身是否合规"→ 硬闸门，直接退回，不进人工复核）——
 # 业务：政府条例级检查（真伪/查重在 verify 节点）之外，本层承接票种/抬头/报销时限三类确定性闸门；
 #       真实企业制度替换只需改 YAML，不动代码

@@ -50,10 +50,21 @@ async def lifespan(app: FastAPI):
     else:
         log_info(logger, "RAG 纯 BM25 模式（未配置 FLOWINVOICE_PG_DSN，向量检索关闭）")
     if ASYNC_ENABLED:
-        # 作用：异步模式启动时把上次崩溃遗留的 processing 任务复位为 pending（worker 重跑），
-        #      避免粘滞任务永久卡死（崩溃窗口自愈；周期回收留给 #62 beat）
-        reset = container.storage.reset_stuck_submissions()
-        log_info(logger, "异步模式：恢复上次崩溃遗留的粘滞任务", reset_count=reset)
+        # #94 崩溃窗口语义收口：不用盲 reset_stuck_submissions（只 processing→pending 不复位重投 →
+        #      制造"永久 pending 僵尸"）。启动那刻所有 processing/pending 均来自已死 worker → force 全量判定：
+        #      结果已落地（requests 行停在 HITL/终态，succeeded 写前崩溃）→ 补 succeeded 不重跑；
+        #      真中途崩溃（行缺失/停在在途）→ 清残留入池票 + 复位重投，worker 领单重跑。
+        from app.tasks.reclaim_task import recover_stuck_submissions
+
+        fixed = recover_stuck_submissions(container, force=True)
+        log_info(logger, "异步模式：崩溃窗口粘滞任务收口完成", fixed_count=fixed)
+    # 作用（#B ③ + #28）：孤儿 checkpoint 对账——checkpointer 现已统一持久化（同步也落盘），
+    #      启动时扫上次运行"图写 checkpoint → upsert 行"间崩溃的单据，把图实时态物化为 requests 行，
+    #      交还正常审批（行缺失的单据不可见=崩溃窗口数据丢失）。同步 MemorySaver 时代无此问题（无持久化）；
+    #      持久化后两模式一致对账，杜绝幽灵单据积压。
+    from app.api.service import materialize_orphan_checkpoints
+    orphan = materialize_orphan_checkpoints(container)
+    log_info(logger, "孤儿 checkpoint 物化对账完成", materialized=orphan)
     # 作用：启动即 sweep 过期上传临时文件（#68，防 data/uploads 无限增长；源文件权威副本在对象存储）
     removed = container.uploader.cleanup_stale()
     log_info(logger, "上传临时文件清理完成", removed=removed)
@@ -68,7 +79,7 @@ app = FastAPI(
 
 基于 **LangGraph 多 Agent 编排** 的差旅报销闭环演示：上传发票后，Agent 自动完成 **识别 → 验真 → 事前申请匹配 → 合规检查（RAG 制度依据）→ 审批链 → 审核总结 → 人工复核（HITL）→ 领导决策 → 通知财务付款**，全程可追溯。
 
-## 演示角色（Mock 组织，见 `app/adapters/mock_oa.py`）
+## 演示角色（Mock 组织，数据源见 `app/adapters/org_data.yaml`，seed 进 employees/approver_roles 表，#27）
 | 工号 | 姓名 | 角色 |
 |---|---|---|
 | 1001 | 张三 | 报销人（员工） |

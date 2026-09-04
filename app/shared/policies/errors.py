@@ -17,7 +17,7 @@ class OcrFailedError(FlowInvoiceError):
 
 
 class AdvanceMissingError(FlowInvoiceError):
-    """缺少有效事前申请：未申请或已过期/已使用"""
+    """缺少有效事前申请：未申请或已过期/已失效"""
 
 
 class AdvanceAmbiguousError(FlowInvoiceError):

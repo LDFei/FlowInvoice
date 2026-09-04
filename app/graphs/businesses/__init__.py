@@ -24,3 +24,11 @@ class BusinessModule(ABC):
     @abstractmethod
     def build_summary(self, state: dict) -> str:
         """生成 Agent 审核总结（真实场景可换 LLM）"""
+
+    def build_summary_agentic(self, state: dict) -> dict:
+        """#32 函数调用实战入口：默认退化为既有总结（无 agent），返回 {"summary": str}
+
+        子类（travel）可在"单票且 LLM 可用"时覆盖：让 LLM 绑定只读工具自主检索制度条款/组织，
+        并把工具轨迹 research_notes 一并回填状态（返回 {"summary", "research_notes"}）。
+        """
+        return {"summary": self.build_summary(state)}

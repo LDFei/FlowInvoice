@@ -32,3 +32,9 @@ class PolicyRagTool:
         parts += list(invoice.get("risk_flags", []))
         query = " ".join(p for p in parts if p)
         return self._index.retrieve(query, top_k)
+
+    def search(self, query: str, top_k: int = 3) -> list[dict]:
+        """#32 函数调用：按关键词直接检索制度条款（给 LLM 自主调用），返回 {clause_id, source, text, score}"""
+        if not self._enabled or not (query or "").strip():
+            return []
+        return self._index.retrieve(query.strip(), top_k)

@@ -3,36 +3,25 @@
 from datetime import datetime
 
 from app.adapters.base import EmailProvider, NotifyProvider, UserProvider, VerifyProvider
+from app.adapters.org import seed_org
 from app.core.logging import get_logger, log_info
 
 logger = get_logger("mock_oa")
 
-# 业务：演示组织架构 —— 员工目录（真实系统从 OA 拉取）
-#       结构：工号 → {姓名/部门/邮箱/直属上级/职级}
-#       grade 取值与 policy/travel.yaml `grade_max_rail_seat` 键对应（#85 席别按职级合规）：
-#       普通员工/经理/总监/高管，对齐差旅费管理规定条款 3.1 的三档（经理未单列，见 YAML 注释）
-DIRECTORY = {
-    "1001": {"id": "1001", "name": "张三", "dept": "销售部", "email": "zhangsan@demo.com", "manager": "2001", "grade": "普通员工"},
-    "2001": {"id": "2001", "name": "李四", "dept": "销售部", "email": "lisi@demo.com", "grade": "经理"},   # 直属上级（销售部经理）
-    "2002": {"id": "2002", "name": "王五", "dept": "销售部", "email": "wangwu@demo.com", "grade": "总监"},  # 部门负责人
-    "3001": {"id": "3001", "name": "赵六", "dept": "财务部", "email": "zhaoliu@demo.com", "grade": "普通员工"},  # 财务（出纳）
-    "4001": {"id": "4001", "name": "孙七", "dept": "总经办", "email": "sunqi@demo.com", "grade": "高管"},    # 总经理
-}
-
-# 业务：审批角色 → 人员（与 policy/travel.yaml 审批链 role 名对应）
-ROLE_MAP = {
-    "直属上级": "2001",
-    "部门负责人": "2002",
-    "财务": "3001",
-    "总经理": "4001",
-}
-
 
 class MockUserProvider(UserProvider):
-    """Mock 组织架构查询"""
+    """Mock 组织架构查询（#27 去硬编码：数据源 org_data.yaml，构造时 seed 入库再从库加载）"""
+
+    def __init__(self, storage):
+        # 作用：每个容器（API/worker/测试）启动时把组织数据全量 seed 进表，再加载为查询缓存。
+        #       源文件见 org_data.yaml（grade 与 policy/travel.yaml `grade_max_rail_seat` 键对应，#85 席别合规）。
+        seed_org(storage)
+        org = storage.load_org()
+        self._directory = org["employees"]
+        self._role_map = org["roles"]
 
     def get_employee(self, employee_id: str) -> dict:
-        emp = DIRECTORY.get(employee_id)
+        emp = self._directory.get(employee_id)
         if not emp:
             raise KeyError(f"员工不存在: {employee_id}")
         return emp
@@ -40,13 +29,19 @@ class MockUserProvider(UserProvider):
     def get_manager(self, employee_id: str) -> dict:
         # 业务：审批链第一级=直属上级
         emp = self.get_employee(employee_id)
-        return DIRECTORY[emp["manager"]]
+        manager_id = emp.get("manager")
+        if not manager_id or manager_id not in self._directory:
+            raise KeyError(f"员工 {employee_id} 未配置直属上级")
+        return self._directory[manager_id]
 
     def get_approver(self, role: str) -> dict:
-        emp_id = ROLE_MAP.get(role)
+        emp_id = self._role_map.get(role)
         if not emp_id:
             raise KeyError(f"审批角色未配置: {role}")
-        return DIRECTORY[emp_id]
+        emp = self._directory.get(emp_id)
+        if not emp:
+            raise KeyError(f"审批角色 {role} 指向的员工不存在: {emp_id}")
+        return emp
 
 
 class MockVerifyProvider(VerifyProvider):

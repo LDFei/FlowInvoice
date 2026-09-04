@@ -102,6 +102,11 @@ ASYNC_ENABLED = os.environ.get("FLOWINVOICE_ASYNC", "").lower() in ("1", "true",
 # 业务：仅异步模式有意义；未启用时无任何依赖
 REDIS_DSN = os.environ.get("FLOWINVOICE_REDIS_DSN", "redis://localhost:6379/0")
 
+# 作用：周期回收判定"任务卡死"的秒数阈值（FLOWINVOICE_STUCK_AFTER_SECONDS 可调）
+# 业务：reclaim 任务把"超过该时长仍 processing"的提交复位重新投递（worker 崩溃运行期自愈）。
+#       远大于单次管线耗时的安全值——正常长任务不会被误重置成重复跑
+STUCK_AFTER_SECONDS = int(os.environ.get("FLOWINVOICE_STUCK_AFTER_SECONDS", "300"))
+
 
 # ===== 技术日志（app/core/logging.py，docs/07） =====
 # 作用：日志级别 / 目录 / 轮转大小 / 备份份数

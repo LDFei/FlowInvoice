@@ -3,6 +3,14 @@
 from app.adapters.base import NotifyProvider
 
 
+def _amount(state: dict) -> float:
+    """#A 多票批金额口径：报销单金额 = Σ 被接受票面（total_amount）；旧单/单票回退 invoice_data.amount"""
+    total = state.get("total_amount")
+    if total is not None:
+        return float(total)
+    return float((state.get("invoice_data") or {}).get("amount") or 0)
+
+
 class NotifyTool:
     """通知封装"""
 
@@ -16,7 +24,7 @@ class NotifyTool:
         title = f"待审核报销单 {request_id}（{state['business_type']}）"
         content = (
             f"报销人 {state['invoice_input'].get('employee_id')}，"
-            f"金额 ¥{state['invoice_data']['amount']:,.2f}。\n"
+            f"金额 ¥{_amount(state):,.2f}。\n"
             f"Agent 审核总结：\n{state['summary']}"
         )
         self._provider.send(request_id, first["role"], title, content)
@@ -40,7 +48,7 @@ class NotifyTool:
         """通知财务（出纳）付款：审批≠支付，付款仅财务执行"""
         title = f"报销单 {request_id} 已批准，待付款"
         content = (
-            f"金额 ¥{state['invoice_data']['amount']:,.2f}，"
+            f"金额 ¥{_amount(state):,.2f}，"
             f"支付方式 {state['invoice_input'].get('payment_method')}，"
             f"请按财务流程处理。"
         )
@@ -52,7 +60,7 @@ class NotifyTool:
         title = f"报销单 {request_id} 已批准（小额告知）"
         content = (
             f"报销人 {state['invoice_input'].get('employee_id')}，"
-            f"金额 ¥{state['invoice_data']['amount']:,.2f}，"
+            f"金额 ¥{_amount(state):,.2f}，"
             f"已由直属上级审批通过，即将由财务出纳打款，总经理知悉即可。"
         )
         self._provider.send(request_id, "总经理", title, content)
@@ -61,7 +69,7 @@ class NotifyTool:
         """通知报销人：财务已打款到账"""
         title = f"报销单 {request_id} 已打款"
         content = (
-            f"金额 ¥{state['invoice_data']['amount']:,.2f}，"
+            f"金额 ¥{_amount(state):,.2f}，"
             f"已由财务出纳打款，请注意查收。"
         )
         self._provider.send(request_id, f"报销人 {state['invoice_input'].get('employee_id')}", title, content)

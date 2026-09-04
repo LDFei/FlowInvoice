@@ -111,6 +111,19 @@ CREATE TABLE IF NOT EXISTS approval_records (
     comment    TEXT,
     time       TEXT NOT NULL
 );
+-- 组织架构（#27 去硬编码：员工/审批角色入库，源 org_data.yaml）
+CREATE TABLE IF NOT EXISTS employees (
+    id      TEXT PRIMARY KEY,
+    name    TEXT NOT NULL,
+    dept    TEXT,
+    email   TEXT,
+    manager TEXT,
+    grade   TEXT
+);
+CREATE TABLE IF NOT EXISTS approver_roles (
+    role        TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL
+);
 """
 
 
@@ -161,6 +174,40 @@ class SqliteStorage(StorageProvider):
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    # ================= 组织架构（#27） =================
+
+    def seed_org(self, payload: dict) -> None:
+        # 作用：全量对齐组织数据（先清后插，保证与 YAML 源一致）；行少，直接重建
+        with self._lock:
+            conn = self._conn()
+            try:
+                conn.execute("DELETE FROM employees")
+                for emp in payload["employees"].values():
+                    conn.execute(
+                        "INSERT INTO employees (id, name, dept, email, manager, grade) VALUES (?, ?, ?, ?, ?, ?)",
+                        (emp["id"], emp["name"], emp.get("dept"), emp.get("email"), emp.get("manager"), emp.get("grade")),
+                    )
+                conn.execute("DELETE FROM approver_roles")
+                for role, emp_id in payload["roles"].items():
+                    conn.execute("INSERT INTO approver_roles (role, employee_id) VALUES (?, ?)", (role, emp_id))
+                conn.commit()
+            finally:
+                conn.close()
+
+    def load_org(self) -> dict:
+        # 作用：读回组织架构（供 UserProvider 启动加载）
+        with self._lock:
+            conn = self._conn()
+            try:
+                emp_rows = conn.execute("SELECT * FROM employees").fetchall()
+                role_rows = conn.execute("SELECT * FROM approver_roles").fetchall()
+            finally:
+                conn.close()
+        return {
+            "employees": {r["id"]: dict(r) for r in emp_rows},
+            "roles": {r["role"]: r["employee_id"] for r in role_rows},
+        }
 
     # ================= 报销请求 =================
 
@@ -224,7 +271,8 @@ class SqliteStorage(StorageProvider):
                 "status": row["status"],
                 "current_step": row["current_step"],
                 "business_type": state.get("business_type", ""),
-                "amount": invoice.get("amount"),
+                # #A 多票批：金额列 = Σ 被接受票面（total_amount）；旧单（无该键）回退单票 invoice_data.amount
+                "amount": state.get("total_amount") if state.get("total_amount") is not None else invoice.get("amount"),
                 "employee_id": state.get("invoice_input", {}).get("employee_id", ""),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -268,11 +316,6 @@ class SqliteStorage(StorageProvider):
                 return dict(row) if row else None
             finally:
                 conn.close()
-
-    def find_active_advance(self, employee_id: str, direction: str, on_date: str) -> dict | None:
-        # 业务：差旅报销时匹配 —— 员工+方向 + 申请区间覆盖报销日期 + 未过有效期 + 状态 active
-        rows = self.find_active_advances(employee_id, direction, on_date)
-        return rows[0] if rows else None
 
     def find_active_advances(self, employee_id: str, direction: str, on_date: str) -> list[dict]:
         # 业务：列出区间覆盖该日期的全部有效申请（按创建先后）——自动匹配要判定"是否唯一命中"，歧义交还报销人（#97）
@@ -474,6 +517,21 @@ class SqliteStorage(StorageProvider):
                 )
                 conn.commit()
                 return cur.rowcount
+            finally:
+                conn.close()
+
+    def requeue_submission(self, request_id: str) -> None:
+        # 作用：failed|processing → pending（错误清空、计数归零）；单行全量复位，供 retry/周期回收
+        with self._lock:
+            conn = self._conn()
+            try:
+                conn.execute(
+                    """UPDATE submissions
+                       SET status = 'pending', error = NULL, attempts = 0, updated_at = ?
+                       WHERE request_id = ?""",
+                    (_now(), request_id),
+                )
+                conn.commit()
             finally:
                 conn.close()
 
