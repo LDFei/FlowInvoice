@@ -54,7 +54,7 @@ flowchart LR
         API[FastAPI 入口]
         API --> AGENT[Agent 编排层<br/>LangGraph]
         AGENT --> TOOL[工具层<br/>OCR/验真/政策/通知/邮件]
-        AGENT --> REG[费用类型组模块<br/>travel 差旅(首个实例)]
+        AGENT --> REG["费用类型组模块<br/>travel 差旅(首个实例)"]
         TOOL --> ADAPT[适配器层 Adapter]
         API --> ANA[财务分析模块<br/>统计/报表]
         ANA --> ADAPT
